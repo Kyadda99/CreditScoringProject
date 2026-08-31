@@ -242,3 +242,8 @@ models/
 
 # Kaggle API credentials
 kaggle.json
+
+# Dokumentacja robocza i spec projektu — trzymane lokalnie, poza repozytorium.
+docs/
+PLAN.md
+CLAUDE.md

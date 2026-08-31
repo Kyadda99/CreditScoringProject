@@ -5,9 +5,9 @@ usługa HTTP → kontener → chmura. Zbiór: [Home Credit Default
 Risk](https://www.kaggle.com/competitions/home-credit-default-risk)
 (`application_train.csv`).
 
-- **Plan realizacji:** [PLAN.md](PLAN.md) — fazy, kryteria ukończenia, harmonogram.
-- **Konwencje projektu:** [CLAUDE.md](CLAUDE.md) — układ modułów, wzorce, zasady kodu.
-- **Wnioski z faz:** [docs/findings/](docs/findings/).
+Dokumentacja robocza (`PLAN.md`, `CLAUDE.md`, `docs/`) jest trzymana lokalnie
+i celowo nieśledzona przez git — plan faz, konwencje kodu i wnioski z kolejnych
+etapów nie wchodzą do repozytorium.
 
 ## Szybki start
 
@@ -28,4 +28,4 @@ pytest` przechodzi też na czystym klonie i w CI.
 
 ## Stan
 
-Faza 0 (fundament) — w toku. Postęp fazami: [PLAN.md](PLAN.md).
+Faza 0 (fundament) — w toku.
