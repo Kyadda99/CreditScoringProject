@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "phase-*"]
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+# Nowy push na tę samą gałąź anuluje poprzedni bieg. Na `main` NIE anulujemy —
+# tam każdy commit musi mieć własny, rozstrzygnięty wynik.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    env:
+      # Egzekwuje, że `uv.lock` jest aktualny wobec `pyproject.toml`: każde
+      # wywołanie uv (także niejawny sync w `uv run`) przerywa, jeśli lock
+      # miałby się zmienić. `--frozen` tego NIE robi — ono tylko nie aktualizuje
+      # locka, więc rozjazd pyproject/lock przeszedłby niezauważony.
+      UV_LOCKED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Pin Python
+        run: uv python install
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Ruff
+        run: uv run ruff check .
+
+      - name: Black
+        run: uv run black --check .
+
+      # Zbiór Home Credit wymaga poświadczeń Kaggle i waży ~160 MB, więc CI go
+      # nie pobiera. Testy oznaczone `requires_data` pominą się same
+      # (tests/conftest.py); reszta musi przejść.
+      - name: Pytest
+        run: uv run pytest
