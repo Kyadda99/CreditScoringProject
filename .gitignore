@@ -216,3 +216,29 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ─────────────────────────────────────────────────────────────
+# Credit Scoring project — see CLAUDE.md "Data & gitignore"
+# ─────────────────────────────────────────────────────────────
+
+# Datasets are pulled programmatically (scripts/download_data.py), never committed.
+# application_train.csv is ~160 MB; a blob that size in git history is painful to remove.
+data/
+
+# MLflow local tracking store
+mlruns/
+mlflow.db
+mlartifacts/
+
+# Model artifacts
+*.pt
+*.pth
+*.joblib
+*.pkl
+models/
+
+# Prediction logs written by the API's BackgroundTasks
+*.jsonl
+
+# Kaggle API credentials
+kaggle.json

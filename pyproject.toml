@@ -1,0 +1,72 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "credit-scoring"
+version = "0.0.0"
+description = "Credit default scoring, end-to-end: data -> model -> service -> cloud"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pandas>=2.2",
+    "kagglehub>=1.0.1",
+]
+
+[project.scripts]
+# Uruchamialne polecenia, zgodnie z CLAUDE.md: cienki `main()` w module
+# pod src/, wywoływany przez `uv run <nazwa>`.
+cs-download = "download_data:main"
+
+[dependency-groups]
+# Dev-only tooling. uv installs these by default with `uv sync`;
+# CI uses the same groups so local and CI runs cannot drift.
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.8",
+    "black>=24.10",
+]
+
+# Flat modules live directly under src/ and are imported by bare name
+# (`from config import TARGET`). Add one entry here per module as each
+# phase introduces it; setuptools fails the build on a name that is not
+# on disk, which keeps this list honest.
+[tool.setuptools]
+py-modules = ["config", "data", "download_data"]
+
+# Sub-packages under src/ (api/, features/, nn/) arrive in later phases.
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "requires_data: needs data/raw/application_train.csv on disk; skipped in CI",
+]
+
+[tool.black]
+line-length = 88
+target-version = ["py312"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# E/W pycodestyle, F pyflakes, I import sorting, UP pyupgrade,
+# B bugbear, ANN missing annotations, D pydocstyle (Google).
+select = ["E", "W", "F", "I", "UP", "B", "ANN", "D"]
+ignore = [
+    "D203",  # conflicts with D211 (no blank line before class docstring)
+    "D213",  # conflicts with D212 (summary on first line)
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# Tests document themselves through their names; full docstrings there are noise.
+"tests/*" = ["D100", "D103", "ANN201"]

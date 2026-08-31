@@ -1,0 +1,11 @@
+# Normalise line endings: LF in the repository, native in the working copy.
+# CI runs on Linux; without this, CRLF from Windows checkouts shows up as
+# spurious diffs and can upset formatters.
+* text=auto eol=lf
+
+# Binary — never diff or normalise.
+*.pdf binary
+*.csv binary
+*.pt binary
+*.pth binary
+*.joblib binary
