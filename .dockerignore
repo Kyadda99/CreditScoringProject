@@ -1,0 +1,17 @@
+# Kontekst budowania musi być mały. Bez tego pliku trafiłby tu 158 MB CSV
+# i całe .venv, co spowalnia każdy build i puchnie warstwy.
+.git/
+.venv/
+data/
+mlruns/
+mlflow.db
+docs/
+notebooks/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+.env
+tests/
+
+# UWAGA: models/ NIE jest tu wykluczone — artefakt musi wejść do obrazu.

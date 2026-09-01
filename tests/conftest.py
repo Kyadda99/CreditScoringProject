@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 import pytest
+import sklearn
 
 from config import DATA_PATH
 
@@ -44,3 +46,44 @@ def _write_column_manifest() -> None:
     MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
     MANIFEST_PATH.write_text(json.dumps(columns, indent=2), encoding="utf-8")
     print(f"\nZapisano manifest {len(columns)} kolumn -> {MANIFEST_PATH}")
+
+
+@pytest.fixture(scope="session")
+def synthetic_artifact(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Buduje maleńki, ale PRAWDZIWY artefakt modelu — bez 158 MB CSV.
+
+    Powód: testy HTTP pilnują kryteriów ukończenia Fazy 1 (`/health`, `/score`
+    zwracające prawdopodobieństwo, 422 na błędnym ciele). Gdy wisiały na
+    markerze `requires_data`, CI pomijało je wszystkie i regresja w `/score`
+    wchodziła na zielono. Kolumny bierzemy z **commitowanego**
+    `feature_schema.json`, więc pipeline ma dokładnie ten kontrakt co produkcja
+    — tylko nauczony na kilkunastu zmyślonych wierszach.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from api.schemas import load_feature_groups
+    from artifact import save_bundle
+    from train import build_pipeline
+
+    groups = load_feature_groups()
+    rng = np.random.default_rng(0)
+    rows = 40
+    data: dict[str, object] = {}
+    for name in groups.numeric:
+        data[name] = rng.normal(size=rows)
+    for name in groups.binary:
+        data[name] = rng.integers(0, 2, size=rows).astype(float)
+    for name in groups.categorical:
+        data[name] = rng.choice(["A", "B"], size=rows)
+    frame = pd.DataFrame(data, columns=list(groups.all_features))
+    target = rng.integers(0, 2, size=rows)
+
+    pipeline = build_pipeline(groups).fit(frame, target)
+    path = tmp_path_factory.mktemp("artifact") / "pipeline.joblib"
+    return save_bundle(
+        pipeline,
+        groups,
+        {"threshold": 0.5, "roc_auc": 0.5, "sklearn_version": sklearn.__version__},
+        path,
+    )
