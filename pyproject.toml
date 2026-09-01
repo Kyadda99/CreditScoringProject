@@ -11,6 +11,9 @@ requires-python = ">=3.12"
 dependencies = [
     "pandas>=2.2",
     "kagglehub>=1.0.1",
+    # kagglehub czyta poświadczenia ze środowiska, ale nie z `.env`.
+    # pydantic-settings w Fazie 1 i tak ciągnie tę bibliotekę pod spodem.
+    "python-dotenv>=1.0",
 ]
 
 [project.scripts]

@@ -82,7 +82,7 @@ def _report_data() -> bool:
     print("\nDane")
     if not DATA_PATH.exists():
         print(f"  [BRAK] {DATA_PATH}")
-        print("         uruchom: uv run python scripts/download_data.py")
+        print("         uruchom: uv run cs-download")
         return False
     size_mb = DATA_PATH.stat().st_size / 1024**2
     print(f"  [ OK ] {DATA_PATH.name} ({size_mb:.1f} MB)")
