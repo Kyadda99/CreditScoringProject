@@ -24,7 +24,10 @@ from data import load_data
 
 pytestmark = pytest.mark.requires_data
 
-EXPECTED_ROWS = 307_511
+# Plik ma 307 511 wierszy; `load_data` odrzuca 4 z `CODE_GENDER == "XNA"`
+# (higiena wierszy z Fazy 2, spec D4). Kontrakt opisuje to, co widzi reszta
+# systemu, więc liczba jest po higienie — nie przed.
+EXPECTED_ROWS = 307_507
 EXPECTED_COLUMNS = 122
 TARGET_RATE_BAND = (0.05, 0.12)
 """Odsetek klasy pozytywnej. Pasmo, nie punkt — chodzi o wykrycie podmiany
@@ -138,3 +141,10 @@ def test_groups_cover_every_column_but_target_and_id(df: pd.DataFrame) -> None:
     """Suma grup + cel + id musi dać dokładnie kolumny pliku."""
     groups = split_feature_groups(df)
     assert set(groups.all_features) | {TARGET, ID_COLUMN} == set(df.columns)
+
+
+# --- Faza 2: higiena wierszy (spec D4) -------------------------------------
+@pytest.mark.requires_data
+def test_loader_applies_hygiene(df: pd.DataFrame) -> None:
+    assert df["TARGET"].notna().all()
+    assert "XNA" not in set(df["CODE_GENDER"].unique())

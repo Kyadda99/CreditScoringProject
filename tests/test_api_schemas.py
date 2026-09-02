@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -45,10 +47,22 @@ def test_categorical_field_accepts_a_string() -> None:
 
 @pytest.mark.requires_data
 def test_schema_matches_the_trained_bundle() -> None:
-    """Sedno D5: commitowany kontrakt i artefakt nie mogą się rozjechać."""
-    assert load_feature_groups() == load_bundle().groups
+    """Sedno D5: commitowany kontrakt i artefakt nie mogą się rozjechać.
+
+    Od Fazy 2 porównujemy kontrakt **wejściowy** (spec D2) — grupy modelu
+    zawierają cechy pochodne, których `feature_schema.json` z definicji nie zna.
+    """
+    assert load_feature_groups() == load_bundle().input_groups
 
 
 def test_response_rejects_a_probability_outside_zero_one() -> None:
     with pytest.raises(ValidationError):
         ScoreResponse(probability=1.4, decision=True, threshold=0.5)
+
+
+def test_schema_matches_the_bundle_input_contract(synthetic_artifact: Path) -> None:
+    """T5 — kontrakt commitowany i artefakt nie mogą się rozjechać."""
+    from api.schemas import FEATURE_GROUPS
+    from artifact import load_bundle
+
+    assert load_bundle(synthetic_artifact).input_groups == FEATURE_GROUPS

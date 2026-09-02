@@ -5,7 +5,17 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from config import ID_COLUMN, TARGET, FeatureGroups, split_feature_groups
+from config import (
+    DAYS_EMPLOYED_SENTINEL,
+    DROPPED_COLUMNS,
+    ENGINEERED_FEATURES,
+    FEATURE_SOURCE_COLUMNS,
+    ID_COLUMN,
+    INFORMATIVE_MISSING,
+    TARGET,
+    FeatureGroups,
+    split_feature_groups,
+)
 
 
 @pytest.fixture
@@ -101,3 +111,46 @@ def test_derivation_is_sample_dependent_so_groups_must_be_frozen(
     assert "CNT_CHILDREN" in train_groups.numeric
     assert "CNT_CHILDREN" in request_groups.binary
     assert train_groups != request_groups
+
+
+# --- Faza 2: decyzje z EDA -------------------------------------------------
+
+
+def test_dropped_columns_are_unique() -> None:
+    assert len(DROPPED_COLUMNS) == len(set(DROPPED_COLUMNS))
+
+
+def test_informative_missing_is_not_dropped() -> None:
+    """Kolumna nie może być jednocześnie usunięta i oznaczana wskaźnikiem."""
+    assert not set(INFORMATIVE_MISSING) & set(DROPPED_COLUMNS)
+
+
+def test_feature_sources_are_not_dropped_from_the_input_contract() -> None:
+    """D2: kolumna karmiąca cechę pochodną musi zostać przyjmowana przez /score."""
+    from api.schemas import FEATURE_GROUPS
+
+    accepted = set(FEATURE_GROUPS.all_features)
+    assert set(FEATURE_SOURCE_COLUMNS) <= accepted
+
+
+def test_split_feature_groups_honours_dropped() -> None:
+    frame = pd.DataFrame({"keep": [1.0, 2.0], "bin": [0.0, 1.0], "junk": [5.0, 6.0]})
+    groups = split_feature_groups(frame, dropped=("junk",))
+    assert "junk" not in groups.all_features
+    assert groups.numeric == ("keep",)
+    assert groups.binary == ("bin",)
+
+
+def test_split_feature_groups_default_drops_nothing() -> None:
+    """Wywołania z Fazy 1 muszą działać bez zmian."""
+    frame = pd.DataFrame({"a": [1.0, 2.0], "b": [3.0, 4.0]})
+    assert set(split_feature_groups(frame).all_features) == {"a", "b"}
+
+
+def test_sentinel_value_is_the_documented_one() -> None:
+    assert DAYS_EMPLOYED_SENTINEL == 365243
+
+
+def test_engineered_features_are_not_raw_columns() -> None:
+    """Nazwy cech pochodnych nie mogą kolidować z kolumnami źródłowymi."""
+    assert not set(ENGINEERED_FEATURES) & set(FEATURE_SOURCE_COLUMNS)

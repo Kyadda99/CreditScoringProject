@@ -199,7 +199,7 @@ def test_lifespan_fails_closed_when_schema_and_artifact_disagree(
     )
     monkeypatch.setenv("CS_MODEL_PATH", str(synthetic_artifact))
     get_settings.cache_clear()
-    with pytest.raises(RuntimeError, match="Kontrakt cech nie zgadza"):
+    with pytest.raises(RuntimeError, match="Kontrakt wejściowy nie zgadza"):
         with TestClient(app_module.app):
             pass
     get_settings.cache_clear()
@@ -240,3 +240,63 @@ def test_threshold_defaults_to_the_value_stored_in_the_artifact(
 
     stored = float(load_bundle(synthetic_artifact).metadata["threshold"])
     assert client.post("/score", json={}).json()["threshold"] == stored
+
+
+# --- Faza 2: kontrakt wejściowy vs kontrakt modelu (spec D2) ---------------
+
+
+def test_lifespan_starts_when_the_two_contracts_differ(client: TestClient) -> None:
+    """Bez repointu strażnika każdy kontener po Fazie 2 odmawia startu."""
+    assert client.get("/health").status_code == 200
+    bundle = app_module.app.state.bundle
+    assert bundle.groups != bundle.input_groups
+
+
+def test_score_still_works_with_engineered_features(client: TestClient) -> None:
+    response = client.post("/score", json={"AMT_CREDIT": 400000.0})
+    assert response.status_code == 200
+    assert 0.0 <= response.json()["probability"] <= 1.0
+
+
+def test_engineered_feature_names_are_rejected_as_input() -> None:
+    """Klient nie może przysłać cechy pochodnej — liczy ją kontener (D2)."""
+    from api.schemas import ScoreRequest
+
+    assert "CREDIT_INCOME_RATIO" not in ScoreRequest.model_fields
+
+
+def test_to_frame_builds_the_row_from_the_input_contract() -> None:
+    inputs = FeatureGroups(numeric=("AMT_CREDIT",), categorical=("X",), binary=())
+    frame = app_module.to_frame({"AMT_CREDIT": 1.0}, inputs)
+    assert list(frame.columns) == ["AMT_CREDIT", "X"]
+
+
+def test_sentinel_is_decoded_inside_the_served_pipeline(client: TestClient) -> None:
+    """Spec D4: klient może przysłać 365243 i pipeline serwisu to rozpoznaje.
+
+    Sprawdzamy krok `features` załadowanego artefaktu, a nie samo
+    prawdopodobieństwo: syntetyczny model uczy się na 40 losowych wierszach
+    i saturuje wynik, więc na `/score` obie odpowiedzi byłyby identyczne
+    niezależnie od tego, czy dekodowanie działa.
+    """
+    bundle = app_module.app.state.bundle
+    engineer = bundle.pipeline.named_steps["features"]
+    inputs = bundle.input_groups
+
+    base = {"AMT_INCOME_TOTAL": 202500.0, "AMT_CREDIT": 406597.5}
+    employed = engineer.transform(
+        app_module.to_frame({**base, "DAYS_EMPLOYED": -637.0}, inputs)
+    )
+    idle = engineer.transform(
+        app_module.to_frame({**base, "DAYS_EMPLOYED": 365243.0}, inputs)
+    )
+
+    assert employed["FLAG_NOT_EMPLOYED"].iloc[0] == 0.0
+    assert idle["FLAG_NOT_EMPLOYED"].iloc[0] == 1.0
+    assert pd.isna(idle["DAYS_EMPLOYED"].iloc[0])
+
+
+def test_score_accepts_the_sentinel_without_error(client: TestClient) -> None:
+    """Wartość sentinelowa nie może wywrócić scoringu na 500."""
+    payload = {"AMT_INCOME_TOTAL": 202500.0, "DAYS_EMPLOYED": 365243.0}
+    assert client.post("/score", json=payload).status_code == 200

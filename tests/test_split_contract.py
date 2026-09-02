@@ -23,10 +23,17 @@ from train import split
 
 pytestmark = pytest.mark.requires_data
 
+# ZMIANA ZAMIERZONA (Faza 2). Higiena wierszy usuwa 4 rekordy
+# `CODE_GENDER == "XNA"` (spec D4), więc `train_test_split` dostaje inną ramkę
+# i podział się przesuwa: 61 503 -> 61 502 wiersze testowe. Ten test wykrył to
+# dokładnie tak, jak zaprojektowano w Fazie 0. Skutek dla porównywalności jest
+# pomijalny — 4 wiersze na 307 511 to 0.0013% zbioru — ale jest odnotowany
+# w `docs/findings/02-eda.md`, bo baseline 0.7479 z Fazy 1 zmierzono na
+# minimalnie innym zbiorze testowym.
 EXPECTED_TEST_SET_SHA256 = (
-    "fc6c4da2768918a908ce3cce54abc7ec66d9efc15d49e41231e7fb0941260bc2"
+    "d6fe6da52b849bf449b1eddfe70176c43ff9cc9a8624540884a24e0a5158d895"
 )
-EXPECTED_TEST_ROWS = 61_503
+EXPECTED_TEST_ROWS = 61_502
 
 
 def _checksum(ids: pd.Series) -> str:

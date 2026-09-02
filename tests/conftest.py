@@ -64,26 +64,35 @@ def synthetic_artifact(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
     from api.schemas import load_feature_groups
     from artifact import save_bundle
+    from config import DROPPED_COLUMNS, split_feature_groups
+    from features import FeatureEngineer
     from train import build_pipeline
 
-    groups = load_feature_groups()
+    inputs = load_feature_groups()  # kontrakt WEJŚCIOWY — surowe kolumny
     rng = np.random.default_rng(0)
     rows = 40
     data: dict[str, object] = {}
-    for name in groups.numeric:
-        data[name] = rng.normal(size=rows)
-    for name in groups.binary:
+    for name in inputs.numeric:
+        # Dodatnie i z dala od zera: mianowniki ilorazów nie mogą być zerem,
+        # bo cała kolumna wyszłaby NaN i imputer nie miałby czego się nauczyć.
+        data[name] = rng.uniform(1.0, 100.0, size=rows)
+    for name in inputs.binary:
         data[name] = rng.integers(0, 2, size=rows).astype(float)
-    for name in groups.categorical:
+    for name in inputs.categorical:
         data[name] = rng.choice(["A", "B"], size=rows)
-    frame = pd.DataFrame(data, columns=list(groups.all_features))
+    frame = pd.DataFrame(data, columns=list(inputs.all_features))
     target = rng.integers(0, 2, size=rows)
+
+    # Grupy MODELU wyprowadzamy z ramki po inżynierii — tak samo jak `train.main`.
+    engineered = FeatureEngineer().fit_transform(frame)
+    groups = split_feature_groups(engineered, dropped=DROPPED_COLUMNS)
 
     pipeline = build_pipeline(groups).fit(frame, target)
     path = tmp_path_factory.mktemp("artifact") / "pipeline.joblib"
     return save_bundle(
         pipeline,
         groups,
+        inputs,
         {"threshold": 0.5, "roc_auc": 0.5, "sklearn_version": sklearn.__version__},
         path,
     )

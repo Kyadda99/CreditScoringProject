@@ -79,3 +79,46 @@ def test_binary_column_is_not_scaled(
     out = np.asarray(pre.transform(frame), dtype=float)
     binary_column = out[:, -1]
     assert set(np.unique(binary_column)) <= {0.0, 1.0}
+
+
+# --- Faza 2: gałąź informative-missing (spec D3) ---------------------------
+
+
+def test_informative_columns_get_their_own_branch() -> None:
+    groups = FeatureGroups(numeric=("a", "b"), categorical=(), binary=())
+    preprocessor = build_preprocessor(groups, informative_missing=("a",))
+    names = [name for name, _, _ in preprocessor.transformers]
+    assert "numeric_informative" in names
+
+
+def test_informative_branch_receives_only_those_columns() -> None:
+    groups = FeatureGroups(numeric=("a", "b"), categorical=(), binary=())
+    preprocessor = build_preprocessor(groups, informative_missing=("a",))
+    by_name = {name: columns for name, _, columns in preprocessor.transformers}
+    assert by_name["numeric_informative"] == ["a"]
+    assert by_name["numeric"] == ["b"]
+
+
+def test_informative_branch_emits_an_indicator_column() -> None:
+    """Wskaźnik to dodatkowa kolumna — bez niej decyzja D3 jest deklaracją."""
+    groups = FeatureGroups(numeric=("a",), categorical=(), binary=())
+    preprocessor = build_preprocessor(groups, informative_missing=("a",))
+    frame = pd.DataFrame({"a": [1.0, np.nan, 3.0]})
+    assert preprocessor.fit_transform(frame).shape[1] == 2
+
+
+def test_no_informative_columns_means_no_extra_branch() -> None:
+    """Transza porównawcza bez wskaźników nie może mieć pustego transformera."""
+    groups = FeatureGroups(numeric=("a",), categorical=(), binary=())
+    preprocessor = build_preprocessor(groups, informative_missing=())
+    names = [name for name, _, _ in preprocessor.transformers]
+    assert "numeric_informative" not in names
+
+
+def test_informative_columns_absent_from_groups_are_ignored() -> None:
+    """Kolumna usunięta z modelu nie wraca przez INFORMATIVE_MISSING."""
+    groups = FeatureGroups(numeric=("a",), categorical=(), binary=())
+    preprocessor = build_preprocessor(groups, informative_missing=("zzz",))
+    by_name = {name: columns for name, _, columns in preprocessor.transformers}
+    assert by_name["numeric"] == ["a"]
+    assert "numeric_informative" not in by_name

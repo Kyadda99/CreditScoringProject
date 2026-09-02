@@ -43,23 +43,27 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def to_frame(payload: dict[str, Any], groups: FeatureGroups) -> pd.DataFrame:
-    """Zamienia ciało żądania na jednowierszową ramkę w kolejności z treningu.
+def to_frame(payload: dict[str, Any], input_groups: FeatureGroups) -> pd.DataFrame:
+    """Zamienia ciało żądania na jednowierszową ramkę SUROWYCH kolumn.
+
+    Buduje wiersz z kontraktu **wejściowego**, nie z grup modelu (spec D2):
+    model konsumuje cechy pochodne, których klient nie przysyła — liczy je
+    `FeatureEngineer` jako pierwszy krok pipeline'u. Budowanie z grup modelu
+    dałoby kolumny `CREDIT_INCOME_RATIO` wypełnione samymi NaN-ami.
 
     Brakujące pola stają się NaN — dokładnie tym, co widział imputer w czasie
-    treningu. Kolejność kolumn bierzemy z `groups`, a nie z żądania: kolejność
-    kluczy w JSON-ie jest przypadkowa, a `ColumnTransformer` wymaga tej samej
-    kolejności, na której był dopasowany.
+    treningu. Kolejność kolumn bierzemy z kontraktu, a nie z żądania: kolejność
+    kluczy w JSON-ie jest przypadkowa.
 
     Args:
         payload: Zwalidowane ciało żądania, bez pól pustych.
-        groups: Grupy cech odtworzone z artefaktu.
+        input_groups: Kontrakt wejściowy odtworzony z artefaktu.
 
     Returns:
-        Ramka o jednym wierszu i dokładnie kolumnach `groups.all_features`.
+        Ramka o jednym wierszu i kolumnach `input_groups.all_features`.
     """
-    row = {name: payload.get(name) for name in groups.all_features}
-    frame = pd.DataFrame([row], columns=list(groups.all_features))
+    row = {name: payload.get(name) for name in input_groups.all_features}
+    frame = pd.DataFrame([row], columns=list(input_groups.all_features))
 
     # Bez tego kroku ramka ma dtype `object`, bo brakujące pola to `None`.
     # `SimpleImputer` szuka `np.nan`, a w tablicy `object` `None != np.nan`, więc
@@ -68,10 +72,10 @@ def to_frame(payload: dict[str, Any], groups: FeatureGroups) -> pd.DataFrame:
     # contains NaN". Kolumny numeryczne ratowała konwersja object->float w
     # sklearn, kategoryczne handle_unknown="ignore"; flagi binarne nie miały
     # żadnej z tych furtek i to one wywracały scoring.
-    numeric_like = [*groups.numeric, *groups.binary]
+    numeric_like = [*input_groups.numeric, *input_groups.binary]
     if numeric_like:
         frame[numeric_like] = frame[numeric_like].astype("float64")
-    categorical = list(groups.categorical)
+    categorical = list(input_groups.categorical)
     if categorical:
         frame[categorical] = (
             frame[categorical].astype(object).where(frame[categorical].notna(), np.nan)
@@ -97,17 +101,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("Ładuję model: %s", settings.model_path)
     bundle = load_bundle(settings.model_path)
 
-    # Fail closed. Kontrakt cech i artefakt wchodzą do obrazu z DWÓCH różnych
+    # Fail closed. Porównujemy kontrakt WEJŚCIOWY (surowe kolumny), a nie grupy
+    # modelu: od Fazy 2 te dwa kontrakty celowo się różnią, bo model konsumuje
+    # cechy pochodne, których klient nie przysyła (spec D2).
+    # Kontrakt cech i artefakt wchodzą do obrazu z DWÓCH różnych
     # źródeł: schemat przez koło z gita, artefakt przez `COPY models/…` z dysku
     # hosta. Bez tej kontroli rozjazd nie daje żadnego błędu — pole obecne
     # w schemacie, a nieznane modelowi, jest po cichu gubione, a cecha, której
     # model potrzebuje, ale schemat jej nie zna, wraca jako 422, choć wewnątrz
     # i tak byłaby imputowana. Serwis scorowałby dalej, tyle że źle.
-    if bundle.groups != FEATURE_GROUPS:
+    if bundle.input_groups != FEATURE_GROUPS:
         raise RuntimeError(
-            "Kontrakt cech nie zgadza się z artefaktem modelu.\n"
-            f"  feature_schema.json: {len(FEATURE_GROUPS.all_features)} cech\n"
-            f"  {settings.model_path}: {len(bundle.groups.all_features)} cech\n"
+            "Kontrakt wejściowy nie zgadza się z artefaktem modelu.\n"
+            f"  feature_schema.json: {len(FEATURE_GROUPS.all_features)} kolumn\n"
+            f"  {settings.model_path}: "
+            f"{len(bundle.input_groups.all_features)} kolumn\n"
             "Przetrenuj model i zacommituj wygenerowany feature_schema.json: "
             "uv run cs-train"
         )
@@ -127,10 +135,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.settings = settings
     logger.info(
         "Model gotowy. ROC-AUC z treningu: %s, próg: %.2f (źródło: %s), "
-        "cech: %d, sklearn: %s",
+        "kolumn wejściowych: %d, cech modelu: %d, sklearn: %s",
         bundle.metadata.get("roc_auc"),
         threshold,
         source,
+        len(bundle.input_groups.all_features),
         len(bundle.groups.all_features),
         bundle.metadata.get("sklearn_version"),
     )
@@ -207,7 +216,7 @@ def score(payload: ScoreRequest, request: Request) -> ScoreResponse:  # type: ig
     bundle = request.app.state.bundle
     threshold = request.app.state.threshold
 
-    frame = to_frame(payload.model_dump(exclude_none=True), bundle.groups)
+    frame = to_frame(payload.model_dump(exclude_none=True), bundle.input_groups)
     try:
         probability = float(bundle.pipeline.predict_proba(frame)[0, 1])
     except ValueError as exc:

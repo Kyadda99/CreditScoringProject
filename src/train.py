@@ -24,7 +24,11 @@ from sklearn.pipeline import Pipeline
 from api import FEATURE_SCHEMA_PATH as _API_FEATURE_SCHEMA_PATH
 from artifact import DEFAULT_ARTIFACT_PATH, save_bundle
 from config import (
+    DROPPED_COLUMNS,
+    ENGINEERED_FEATURES,
+    FEATURE_SOURCE_COLUMNS,
     ID_COLUMN,
+    INFORMATIVE_MISSING,
     PROJECT_ROOT,
     RANDOM_STATE,
     TARGET,
@@ -33,6 +37,7 @@ from config import (
 )
 from data import load_data
 from evaluation import DEFAULT_THRESHOLD, evaluate
+from features import FeatureEngineer
 from models import get_models
 from preprocessing import build_preprocessor
 
@@ -77,38 +82,71 @@ def split(
     )
 
 
-def build_pipeline(groups: FeatureGroups) -> Pipeline:
-    """Składa preprocessing i estymator w jeden obiekt.
+def build_pipeline(
+    groups: FeatureGroups, features: tuple[str, ...] = ENGINEERED_FEATURES
+) -> Pipeline:
+    """Składa inżynierię cech, preprocessing i estymator w jeden obiekt.
 
-    Jeden `Pipeline` oznacza, że imputacja i skalowanie uczą się wyłącznie na
-    foldzie treningowym, a serwowanie dostaje dokładnie te same przekształcenia
-    co trening — nie ma miejsca na train/serve skew.
+    `FeatureEngineer` jest **pierwszym** krokiem (spec D1): dzięki temu cała
+    derywacja jedzie w artefakcie, a `/score` przyjmuje surowe kolumny. Jeden
+    `Pipeline` oznacza też, że imputacja i skalowanie uczą się wyłącznie na
+    foldzie treningowym — nie ma miejsca na train/serve skew.
 
     Args:
-        groups: Grupy cech wyprowadzone na zbiorze treningowym.
+        groups: Grupy cech wyprowadzone na ramce treningowej **po** inżynierii.
+        features: Cechy pochodne do policzenia. `()` daje transzę 1 z D7 —
+            samo czyszczenie, bez ilorazów.
 
     Returns:
         Niedopasowany `Pipeline`.
     """
     return Pipeline(
         [
+            ("features", FeatureEngineer(features=features)),
             ("preprocessor", build_preprocessor(groups)),
             ("model", get_models()[MODEL_NAME]),
         ]
     )
 
 
+def input_contract(
+    X_train: pd.DataFrame, dropped: tuple[str, ...] = DROPPED_COLUMNS
+) -> FeatureGroups:
+    """Wyprowadza kontrakt wejściowy `/score` z surowej ramki treningowej.
+
+    Reguła przynależności (spec D2): kolumna jest przyjmowana, jeśli **albo**
+    zostaje cechą modelu, **albo** karmi cechę pochodną. Drugi warunek jest
+    istotny — kolumna usunięta z modelu, ale licząca się do ilorazu, musi
+    nadal być przyjmowana, inaczej iloraz zawsze wychodzi NaN.
+
+    Args:
+        X_train: Surowa ramka treningowa, bez celu i identyfikatora.
+        dropped: Kolumny usunięte decyzją z EDA.
+
+    Returns:
+        Grupy **surowych** kolumn — bez cech pochodnych.
+    """
+    kept = set(X_train.columns) - set(dropped) | set(FEATURE_SOURCE_COLUMNS)
+    accepted = [c for c in X_train.columns if c in kept]
+    return split_feature_groups(X_train[accepted])
+
+
 def write_feature_schema(
     groups: FeatureGroups, path: Path = FEATURE_SCHEMA_PATH
 ) -> Path:
-    """Zapisuje grupy cech jako **commitowany** kontrakt dla schematu API.
+    """Zapisuje **kontrakt wejściowy** jako commitowany plik dla schematu API.
 
     API musi znać nazwy i typy pól, żeby zbudować model żądania, ale artefakt
     jest gitignorowany — nie ma go ani w CI, ani w świeżym klonie. Ten plik
     jest tym, z czego `api/schemas.py` generuje `ScoreRequest`.
 
+    Uwaga (spec D2): od Fazy 2 dostaje **kontrakt wejściowy** (surowe kolumny),
+    a nie grupy modelu. Grupy modelu zawierają cechy pochodne, których klient
+    nie ma jak przysłać — zapisanie ich tutaj wygenerowałoby `/score`
+    przyjmujące `CREDIT_INCOME_RATIO`.
+
     Args:
-        groups: Grupy cech z treningu.
+        groups: Kontrakt wejściowy z `input_contract()`.
         path: Ścieżka docelowa.
 
     Returns:
@@ -120,28 +158,39 @@ def write_feature_schema(
     return path
 
 
-def main() -> None:
-    """Trenuje model bazowy i zapisuje wszystko, czego potrzebuje serwowanie."""
+def main(engineered: bool = True) -> None:
+    """Trenuje model bazowy i zapisuje wszystko, czego potrzebuje serwowanie.
+
+    Args:
+        engineered: Gdy `False`, cechy pochodne są wyłączone — to transza 1
+            ze spec D7, mierząca sam efekt czyszczenia i obsługi braków.
+    """
+    features = ENGINEERED_FEATURES if engineered else ()
+    run_name = MODEL_NAME if engineered else f"{MODEL_NAME}_no_engineered"
+
     df = load_data()
     X_train, X_test, y_train, y_test = split(df)
 
-    # Grupy wyprowadzamy WYŁĄCZNIE ze zbioru treningowego. Policzone na pełnej
-    # ramce pozwoliłyby zbiorowi testowemu wpłynąć na to, która kolumna uchodzi
-    # za flagę — subtelny, ale prawdziwy przeciek.
-    groups = split_feature_groups(X_train)
+    # Grupy modelu wyprowadzamy z ramki PO inżynierii — inaczej cechy pochodne
+    # nie trafiłyby do żadnej grupy, a `remainder="drop"` cicho by je wyrzucił,
+    # i cała Faza 2 nie zmieniłaby ani jednej liczby.
+    engineered_train = FeatureEngineer(features=features).fit_transform(X_train)
+    groups = split_feature_groups(engineered_train, dropped=DROPPED_COLUMNS)
+    inputs = input_contract(X_train)
     logger.info(
-        "Cechy: %d numerycznych, %d kategorycznych, %d binarnych.",
+        "Model: %d num / %d kat / %d bin. Kontrakt wejściowy: %d kolumn.",
         len(groups.numeric),
         len(groups.categorical),
         len(groups.binary),
+        len(inputs.all_features),
     )
 
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     mlflow.set_experiment(EXPERIMENT_NAME)
 
-    with mlflow.start_run(run_name=MODEL_NAME):
-        pipeline = build_pipeline(groups)
-        logger.info("Trenuję %s na %d wierszach ...", MODEL_NAME, len(X_train))
+    with mlflow.start_run(run_name=run_name):
+        pipeline = build_pipeline(groups, features=features)
+        logger.info("Trenuję %s na %d wierszach ...", run_name, len(X_train))
         pipeline.fit(X_train, y_train)
 
         y_proba = pipeline.predict_proba(X_test)[:, 1]
@@ -150,6 +199,10 @@ def main() -> None:
         mlflow.log_params(
             {
                 "model": MODEL_NAME,
+                "engineered": engineered,
+                "n_engineered": len(features),
+                "n_dropped": len(DROPPED_COLUMNS),
+                "n_informative_missing": len(INFORMATIVE_MISSING),
                 "test_size": TEST_SIZE,
                 "random_state": RANDOM_STATE,
                 "n_numeric": len(groups.numeric),
@@ -162,18 +215,33 @@ def main() -> None:
         metadata = {
             **metrics,
             "model": MODEL_NAME,
+            "engineered": engineered,
             "trained_at": datetime.now(UTC).isoformat(),
             "sklearn_version": sklearn.__version__,
             "rows_train": int(len(X_train)),
             "rows_test": int(len(X_test)),
         }
-        save_bundle(pipeline, groups, metadata, DEFAULT_ARTIFACT_PATH)
-        write_feature_schema(groups)
+        save_bundle(pipeline, groups, inputs, metadata, DEFAULT_ARTIFACT_PATH)
+        write_feature_schema(inputs)
 
-    logger.info("BAZOWY ROC-AUC: %.4f", metrics["roc_auc"])
+    logger.info("ROC-AUC (%s): %.4f", run_name, metrics["roc_auc"])
     for name, value in sorted(metrics.items()):
         logger.info("  %-10s %.4f", name, value)
 
 
+def cli() -> None:
+    """Wejście `uv run cs-train`. `--no-engineered` daje transzę 1 z D7."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Trenuje model scoringowy.")
+    parser.add_argument(
+        "--no-engineered",
+        action="store_true",
+        help="Wyłącza cechy pochodne — mierzy sam efekt czyszczenia (spec D7).",
+    )
+    args = parser.parse_args()
+    main(engineered=not args.no_engineered)
+
+
 if __name__ == "__main__":
-    main()
+    cli()

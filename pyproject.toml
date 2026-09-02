@@ -27,7 +27,7 @@ dependencies = [
 # Uruchamialne polecenia, zgodnie z CLAUDE.md: cienki `main()` w module
 # pod src/, wywoływany przez `uv run <nazwa>`.
 cs-download = "download_data:main"
-cs-train = "train:main"
+cs-train = "train:cli"
 cs-serve = "api.app:main"
 
 [dependency-groups]
@@ -38,6 +38,8 @@ dev = [
     "ruff>=0.8",
     "black>=24.10",
     "httpx>=0.27",
+    "jupyterlab>=4.6.3",
+    "matplotlib>=3.11.1",
 ]
 
 # Potrzebne wyłącznie offline: trening i pobieranie danych. Obraz kontenera
@@ -57,7 +59,7 @@ default-groups = ["dev", "training"]
 # phase introduces it; setuptools fails the build on a name that is not
 # on disk, which keeps this list honest.
 [tool.setuptools]
-py-modules = ["config", "data", "download_data", "preprocessing", "models", "evaluation", "artifact", "train"]
+py-modules = ["config", "data", "download_data", "preprocessing", "models", "evaluation", "artifact", "train", "eda"]
 
 # Sub-packages under src/ (api/, features/, nn/) arrive in later phases.
 [tool.setuptools.packages.find]

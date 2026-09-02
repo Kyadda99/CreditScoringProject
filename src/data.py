@@ -1,8 +1,13 @@
-"""Wczytywanie surowych danych.
+"""Wczytywanie surowych danych i higiena wierszy.
 
-Faza 0 celowo **nie czyści** danych. Decyzje o imputacji, wartościach
-sentinelowych (np. `DAYS_EMPLOYED == 365243`) i outlierach wymagają dowodów
-z EDA — te powstają w Fazie 2. Tutaj tylko czytamy i rzutujemy typy.
+Podział obowiązków po Fazie 2 (spec D4): tutaj mieszka **wyłącznie** to, co
+nie ma sensu poza zbiorem treningowym — odrzucenie wierszy bez celu i wierszy
+z `CODE_GENDER == "XNA"`.
+
+Czyszczenie **kolumn** — sentinel `DAYS_EMPLOYED == 365243`, imputacja, cechy
+pochodne — mieszka w `features/`, wewnątrz pipeline'u. Powód: klient `/score`
+może przysłać sentinel, a kod wykonywany tylko przy wczytywaniu CSV nie
+obroniłby produkcji.
 """
 
 from __future__ import annotations
@@ -15,6 +20,35 @@ import pandas as pd
 from config import DATA_PATH, ID_COLUMN, TARGET
 
 logger = logging.getLogger(__name__)
+
+
+def drop_unusable_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Usuwa wiersze, których nie da się użyć do uczenia.
+
+    Wyłącznie higiena **wierszy**, i wyłącznie taka, która nie ma sensu poza
+    zbiorem treningowym (spec D4). Wszystko, co klient `/score` mógłby przysłać
+    źle — sentinele, braki, wartości spoza zakresu — mieszka w `FeatureEngineer`
+    i w dopasowanym imputerze, bo tylko tam zadziała także w produkcji.
+
+    Args:
+        df: Ramka; brakujące kolumny są tolerowane, żeby dało się wywołać to
+            także na ramce bez celu.
+
+    Returns:
+        Nowa ramka bez wierszy z brakującym celem i bez `CODE_GENDER == "XNA"`.
+    """
+    frame = df
+    if TARGET in frame.columns:
+        frame = frame[frame[TARGET].notna()]
+    if "CODE_GENDER" in frame.columns:
+        # "XNA" to nie trzecia kategoria płci, tylko brak zapisany tekstem.
+        # Czterech wierszy na 307 tysięcy nie warto imputować — one-hot
+        # zrobiłby z tego osobną kolumnę o czterech obserwacjach.
+        frame = frame[frame["CODE_GENDER"] != "XNA"]
+    if len(frame) == len(df):
+        return df
+    logger.info("Higiena wierszy: %d -> %d.", len(df), len(frame))
+    return frame.reset_index(drop=True)
 
 
 def load_data(path: Path | None = None) -> pd.DataFrame:
@@ -47,6 +81,8 @@ def load_data(path: Path | None = None) -> pd.DataFrame:
     for column in (ID_COLUMN, TARGET):
         if column in df.columns:
             df[column] = pd.to_numeric(df[column], errors="coerce")
+
+    df = drop_unusable_rows(df)
 
     logger.info("Wczytano %d wierszy x %d kolumn.", len(df), df.shape[1])
     return df

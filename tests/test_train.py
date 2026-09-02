@@ -22,7 +22,13 @@ def frame() -> pd.DataFrame:
         {
             ID_COLUMN: range(size),
             TARGET: rng.integers(0, 2, size=size),
-            "AMT_INCOME_TOTAL": rng.random(size) * 1000,
+            "AMT_INCOME_TOTAL": rng.random(size) * 1000 + 1.0,
+            "AMT_CREDIT": rng.random(size) * 2000 + 1.0,
+            "AMT_ANNUITY": rng.random(size) * 100 + 1.0,
+            "AMT_GOODS_PRICE": rng.random(size) * 1800 + 1.0,
+            "CNT_FAM_MEMBERS": rng.integers(1, 4, size=size).astype(float),
+            "DAYS_BIRTH": -rng.integers(7000, 20000, size=size).astype(float),
+            "DAYS_EMPLOYED": -rng.integers(100, 5000, size=size).astype(float),
             "NAME_CONTRACT_TYPE": rng.choice(["Cash", "Revolving"], size=size),
             "FLAG_MOBIL": rng.integers(0, 2, size=size),
         }
@@ -63,10 +69,12 @@ def test_split_is_reproducible(frame: pd.DataFrame) -> None:
     assert first == second
 
 
-def test_pipeline_has_preprocessor_then_model(groups: FeatureGroups) -> None:
+def test_pipeline_has_features_preprocessor_then_model(
+    groups: FeatureGroups,
+) -> None:
     pipeline = build_pipeline(groups)
     assert isinstance(pipeline, Pipeline)
-    assert list(dict(pipeline.steps)) == ["preprocessor", "model"]
+    assert list(dict(pipeline.steps)) == ["features", "preprocessor", "model"]
 
 
 def test_pipeline_fits_and_predicts_in_unit_range(
@@ -83,3 +91,55 @@ def test_write_feature_schema_round_trips(tmp_path: Path) -> None:
     path = write_feature_schema(groups, tmp_path / "feature_schema.json")
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert FeatureGroups.from_dict(payload) == groups
+
+
+# --- Faza 2: kontrakt wejściowy i inżynieria cech (spec D1, D2, D7) --------
+
+
+def test_input_contract_is_raw_columns_only() -> None:
+    """Kontrakt wejściowy nie może zawierać cech pochodnych (spec D2)."""
+    from train import input_contract
+
+    frame = pd.DataFrame(
+        {
+            "AMT_CREDIT": [1.0, 2.0],
+            "AMT_INCOME_TOTAL": [3.0, 4.0],
+            "NAME_CONTRACT_TYPE": ["a", "b"],
+        }
+    )
+    contract = input_contract(frame)
+    assert "CREDIT_INCOME_RATIO" not in contract.all_features
+
+
+def test_input_contract_keeps_a_dropped_column_that_feeds_a_feature() -> None:
+    """Reguła przynależności z D2 — bez tego iloraz zawsze wychodzi NaN."""
+    from config import FEATURE_SOURCE_COLUMNS
+    from train import input_contract
+
+    frame = pd.DataFrame({name: [1.0, 2.0] for name in FEATURE_SOURCE_COLUMNS})
+    frame["JUNK"] = [9.0, 9.0]
+    contract = input_contract(frame, dropped=(*FEATURE_SOURCE_COLUMNS, "JUNK"))
+    assert set(FEATURE_SOURCE_COLUMNS) <= set(contract.all_features)
+    assert "JUNK" not in contract.all_features
+
+
+def test_build_pipeline_puts_the_engineer_first() -> None:
+    from config import FeatureGroups
+    from train import build_pipeline
+
+    groups = FeatureGroups(numeric=("AMT_CREDIT",), categorical=(), binary=())
+    assert list(build_pipeline(groups).named_steps) == [
+        "features",
+        "preprocessor",
+        "model",
+    ]
+
+
+def test_build_pipeline_can_disable_engineered_features() -> None:
+    """Transza 1 ze spec D7."""
+    from config import FeatureGroups
+    from train import build_pipeline
+
+    groups = FeatureGroups(numeric=("AMT_CREDIT",), categorical=(), binary=())
+    pipeline = build_pipeline(groups, features=())
+    assert pipeline.named_steps["features"].features == ()
