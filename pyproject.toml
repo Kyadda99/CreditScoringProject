@@ -21,6 +21,12 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "pydantic-settings>=2.4",
+    # RUNTIME, choć api/app.py nigdy go nie importuje: championem Fazy 3 jest
+    # XGBClassifier, więc joblib ładuje xgboost.sklearn przy odpakowywaniu
+    # artefaktu. Bez tego kontener wstaje i pada dopiero w `lifespan`.
+    # Gdyby champion kiedyś przestał być XGBoostem, ta pozycja wraca do grupy
+    # `training` — obraz ma płacić wyłącznie za to, co faktycznie wozi.
+    "xgboost>=3.4.1",
 ]
 
 [project.scripts]
@@ -28,6 +34,8 @@ dependencies = [
 # pod src/, wywoływany przez `uv run <nazwa>`.
 cs-download = "download_data:main"
 cs-train = "train:cli"
+cs-tune = "tune:cli"
+cs-export = "registry:cli"
 cs-serve = "api.app:main"
 
 [dependency-groups]
@@ -47,19 +55,37 @@ dev = [
 training = [
     "mlflow>=2.16",
     "kagglehub>=1.0.1",
+    "imbalanced-learn>=0.14.2",
+    "optuna>=4.9.0",
+    "optuna-integration[mlflow]>=4.9.0",
 ]
 
 # Lokalnie chcemy komplet: dev do testów, training do `cs-train` i `cs-download`.
 # Obraz kontenera świadomie omija oba.
 [tool.uv]
 default-groups = ["dev", "training"]
+# XGBoost na Linuksie ciągnie `nvidia-nccl-cu13` — 288 MB bibliotek CUDA do
+# komunikacji zbiorowej między GPU. Serwis scoringowy liczy JEDEN wiersz na
+# CPU i nigdy nie zobaczy karty graficznej, więc to czysty balast: obraz rósł
+# przez to z 700 MB do 1.4 GB. Marker `sys_platform == 'never'` nie pasuje do
+# żadnej platformy, więc pakiet nie instaluje się nigdzie.
+#
+# Gdyby Faza 4 chciała trenować XGBoosta na GPU, ten override trzeba zdjąć
+# — ale wtedy i tak wraca do grupy `training`, nie do obrazu.
+override-dependencies = ["nvidia-nccl-cu13; sys_platform == 'never'"]
 
 # Flat modules live directly under src/ and are imported by bare name
 # (`from config import TARGET`). Add one entry here per module as each
-# phase introduces it; setuptools fails the build on a name that is not
-# on disk, which keeps this list honest.
+# phase introduces it.
+#
+# WARNING (verified 2026-09-04, setuptools 80.x): a name listed here that is
+# NOT on disk is **silently skipped** — the build still succeeds. An earlier
+# version of this comment claimed the opposite. So this list does not police
+# itself: delete a module and the wheel just quietly loses it, exactly the
+# kind of silent drift that bit us in Phase 1 (M1/M4). The real guard is
+# tests/test_api.py importing through the installed package.
 [tool.setuptools]
-py-modules = ["config", "data", "download_data", "preprocessing", "models", "evaluation", "artifact", "train", "eda"]
+py-modules = ["config", "data", "download_data", "preprocessing", "models", "evaluation", "artifact", "train", "eda", "quality_gate", "registry", "tune"]
 
 # Sub-packages under src/ (api/, features/, nn/) arrive in later phases.
 [tool.setuptools.packages.find]

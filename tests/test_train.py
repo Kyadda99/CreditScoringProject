@@ -143,3 +143,276 @@ def test_build_pipeline_can_disable_engineered_features() -> None:
     groups = FeatureGroups(numeric=("AMT_CREDIT",), categorical=(), binary=())
     pipeline = build_pipeline(groups, features=())
     assert pipeline.named_steps["features"].features == ()
+
+
+# --- Faza 3: estymator i sampler w pipelinie (spec D3) ---------------------
+
+
+def test_build_pipeline_defaults_to_the_baseline_estimator(
+    groups: FeatureGroups,
+) -> None:
+    """Bez jawnego estymatora dostajemy regresję logistyczną — jak w Fazie 2.
+
+    Domyślna wartość istnieje celowo: `build_pipeline(groups)` ma pięć
+    istniejących wywołań, w tym fixture `synthetic_artifact` w conftest.py.
+    Uczynienie estymatora obowiązkowym wyłączyłoby cały zestaw testów HTTP
+    w CI, a suite nadal raportowałby zieleń — to regresja M1 z Fazy 1.
+    """
+    from sklearn.linear_model import LogisticRegression
+
+    assert isinstance(build_pipeline(groups).named_steps["model"], LogisticRegression)
+
+
+def test_build_pipeline_accepts_an_explicit_estimator(groups: FeatureGroups) -> None:
+    from xgboost import XGBClassifier
+
+    from models import get_models
+
+    pipeline = build_pipeline(groups, estimator=get_models()["xgboost"])
+    assert isinstance(pipeline.named_steps["model"], XGBClassifier)
+
+
+def test_sampler_produces_an_imblearn_pipeline_with_the_sampler_in_place(
+    groups: FeatureGroups,
+) -> None:
+    from imblearn.pipeline import Pipeline as ImbPipeline
+
+    from models import get_models, get_sampler
+
+    pipeline = build_pipeline(
+        groups,
+        estimator=get_models("resample")["logistic_regression"],
+        sampler=get_sampler("resample"),
+    )
+    assert isinstance(pipeline, ImbPipeline)
+    assert list(pipeline.named_steps) == [
+        "features",
+        "preprocessor",
+        "sampler",
+        "model",
+    ]
+
+
+def test_sampler_is_inert_outside_fit(
+    frame: pd.DataFrame, groups: FeatureGroups
+) -> None:
+    """Gwarancja braku wycieku (spec D3): sampler nie działa przy predict.
+
+    Gdyby działał, predict na n wierszach zwracałby inną liczbę wyników niż n
+    — a w walidacji krzyżowej oznaczałoby to ocenianie modelu na syntetycznych
+    wierszach, których nigdy nie było w danych. Context7 nie ma dokumentacji
+    imbalanced-learn na ten temat, więc własność jest tu SPRAWDZANA, a nie
+    przyjmowana na wiarę.
+    """
+    from models import get_models, get_sampler
+
+    X_train, X_test, y_train, _y_test = split(frame)
+    pipeline = build_pipeline(
+        groups,
+        estimator=get_models("resample")["logistic_regression"],
+        sampler=get_sampler("resample"),
+    ).fit(X_train, y_train)
+
+    assert len(pipeline.predict(X_test)) == len(X_test)
+    assert pipeline.predict_proba(X_test).shape == (len(X_test), 2)
+
+
+def test_sampler_actually_rebalances_during_fit(
+    frame: pd.DataFrame, groups: FeatureGroups
+) -> None:
+    """Kontrola pozytywna do testu wyżej: sampler MUSI coś robić w `fit`.
+
+    Bez tego "bezczynny przy predict" byłby spełniony także przez sampler,
+    który nie robi nic nigdzie — a wtedy całe ramię `resample` byłoby cichą
+    kopią ramienia `none`.
+    """
+    from imblearn.over_sampling import SMOTE
+
+    # Fixture `frame` ma cel ~50/50, na którym SMOTE nie ma czego wyrównywać.
+    # Ten test potrzebuje realnego niezbalansowania, więc narzuca własne
+    # etykiety — 10% pozytywów, blisko produkcyjnych 8.07%.
+    imbalanced = frame.copy()
+    imbalanced[TARGET] = ([0] * 180) + ([1] * 20)
+
+    X_train, _X_test, y_train, _y_test = split(imbalanced)
+    engineered = build_pipeline(groups, features=()).named_steps["features"]
+    prep = build_pipeline(groups, features=()).named_steps["preprocessor"]
+    matrix = prep.fit_transform(engineered.fit_transform(X_train), y_train)
+
+    _resampled_X, resampled_y = SMOTE(random_state=42).fit_resample(matrix, y_train)
+    assert len(resampled_y) > len(y_train), "SMOTE nie dołożył ani jednego wiersza"
+    # Po wyrównaniu obie klasy mają tyle samo wierszy.
+    assert int(resampled_y.sum()) == int((resampled_y == 0).sum())
+
+
+# --- Faza 3: siatka eksperymentu (spec D2) --------------------------------
+
+
+def test_run_grid_returns_one_metrics_dict_per_cell(
+    frame: pd.DataFrame, groups: FeatureGroups
+) -> None:
+    from train import run_grid
+
+    X_train, X_test, y_train, y_test = split(frame)
+    results = run_grid(
+        X_train,
+        y_train,
+        X_test,
+        y_test,
+        groups,
+        models=("logistic_regression",),
+        arms=("none", "class_weight"),
+        features=(),
+        track=False,
+    )
+    assert set(results) == {
+        ("logistic_regression", "none"),
+        ("logistic_regression", "class_weight"),
+    }
+    for metrics in results.values():
+        assert {"roc_auc", "pr_auc", "recall", "expected_cost"} <= set(metrics)
+
+
+def test_run_grid_covers_the_full_product_of_models_and_arms(
+    frame: pd.DataFrame, groups: FeatureGroups
+) -> None:
+    """Siatka to iloczyn kartezjański — brak komórki psuje porównanie."""
+    from train import run_grid
+
+    X_train, X_test, y_train, y_test = split(frame)
+    results = run_grid(
+        X_train,
+        y_train,
+        X_test,
+        y_test,
+        groups,
+        models=("logistic_regression", "xgboost"),
+        arms=("none", "class_weight"),
+        features=(),
+        track=False,
+    )
+    assert len(results) == 4
+
+
+def test_comparison_table_is_sorted_by_pr_auc() -> None:
+    """Champion wybieramy po PR-AUC (spec D1), więc tabela ma to odzwierciedlać."""
+    from train import comparison_table
+
+    def row(pr_auc: float, roc_auc: float) -> dict[str, float]:
+        return {
+            "pr_auc": pr_auc,
+            "roc_auc": roc_auc,
+            "recall": 0.1,
+            "precision": 0.2,
+            "f1": 0.1,
+            "threshold": 0.5,
+            "expected_cost": 100.0,
+        }
+
+    table = comparison_table(
+        {("a", "none"): row(0.10, 0.7), ("b", "none"): row(0.30, 0.8)}
+    )
+    assert list(table["model"]) == ["b", "a"]
+    assert list(table.columns) == [
+        "model",
+        "imbalance",
+        "roc_auc",
+        "pr_auc",
+        "precision",
+        "recall",
+        "f1",
+        "threshold",
+        "expected_cost",
+    ]
+
+
+# --- Faza 3: wybór championa i jego próg (spec D1, D4) --------------------
+
+
+def test_select_champion_picks_the_highest_pr_auc() -> None:
+    from train import select_champion
+
+    results = {
+        ("logistic_regression", "none"): {"pr_auc": 0.11, "roc_auc": 0.90},
+        ("xgboost", "class_weight"): {"pr_auc": 0.24, "roc_auc": 0.75},
+        ("random_forest", "resample"): {"pr_auc": 0.19, "roc_auc": 0.99},
+    }
+    assert select_champion(results) == ("xgboost", "class_weight")
+
+
+def test_select_champion_ignores_roc_auc() -> None:
+    """Gdyby wybór szedł po ROC-AUC, wygrałoby "b" — a nie wygrywa (spec D1)."""
+    from train import select_champion
+
+    results = {
+        ("a", "none"): {"pr_auc": 0.30, "roc_auc": 0.70},
+        ("b", "none"): {"pr_auc": 0.20, "roc_auc": 0.99},
+    }
+    assert select_champion(results)[0] == "a"
+
+
+def test_fit_champion_threshold_is_not_the_default_half(
+    frame: pd.DataFrame, groups: FeatureGroups
+) -> None:
+    """Próg pochodzi z przemiatania kosztowego na OOF, a nie z rozpędu."""
+    from train import fit_champion
+
+    X_train, X_test, y_train, y_test = split(frame)
+    _pipeline, threshold, metrics = fit_champion(
+        X_train,
+        y_train,
+        X_test,
+        y_test,
+        groups,
+        model_name="logistic_regression",
+        arm="none",
+        features=(),
+        cv_splits=3,
+    )
+    assert 0.0 < threshold < 1.0
+    assert metrics["threshold"] == threshold
+
+
+def test_fit_champion_returns_a_fitted_usable_pipeline(
+    frame: pd.DataFrame, groups: FeatureGroups
+) -> None:
+    from train import fit_champion
+
+    X_train, X_test, y_train, y_test = split(frame)
+    pipeline, _threshold, _metrics = fit_champion(
+        X_train,
+        y_train,
+        X_test,
+        y_test,
+        groups,
+        model_name="logistic_regression",
+        arm="none",
+        features=(),
+        cv_splits=3,
+    )
+    assert len(pipeline.predict(X_test)) == len(X_test)
+
+
+def test_fit_champion_cost_threshold_raises_recall_over_the_default(
+    frame: pd.DataFrame, groups: FeatureGroups
+) -> None:
+    """Sedno fazy: przy koszcie FN 10x FP próg spada, a recall rośnie."""
+    from evaluation import evaluate
+    from train import fit_champion
+
+    X_train, X_test, y_train, y_test = split(frame)
+    pipeline, _threshold, metrics = fit_champion(
+        X_train,
+        y_train,
+        X_test,
+        y_test,
+        groups,
+        model_name="logistic_regression",
+        arm="class_weight",
+        features=(),
+        cv_splits=3,
+    )
+    at_half = evaluate(
+        y_test.to_numpy(), pipeline.predict_proba(X_test)[:, 1], threshold=0.5
+    )
+    assert metrics["recall"] >= at_half["recall"]

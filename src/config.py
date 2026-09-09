@@ -35,6 +35,19 @@ RANDOM_STATE: int = 42
 BINARY_VALUES: frozenset[float] = frozenset({0.0, 1.0})
 """Wartości, jakie może przyjmować kolumna liczbowa uznana za flagę 0/1."""
 
+# --- Założenie kosztowe (Faza 3, spec D4) -----------------------------------
+#
+# Deklarowane ZANIM policzymy jakikolwiek próg. Przeoczony default forfeituje
+# niespłacony kapitał; fałszywy alarm forfeituje marżę na jednym odrzuconym
+# wniosku. 10:1 to obronione ZAŁOŻENIE, nie zmierzony fakt — i jako założenie
+# jest raportowane w docs/findings/03-model-selection.md.
+
+COST_FN: float = 10.0
+"""Koszt przeoczonego defaultu (false negative)."""
+
+COST_FP: float = 1.0
+"""Koszt fałszywego alarmu (false positive)."""
+
 # --- Decyzje z EDA (Faza 2) -------------------------------------------------
 #
 # Te krotki są *zapisem decyzji*, nie mechanizmem. Samo usunięcie kolumny nie
@@ -275,3 +288,16 @@ def split_feature_groups(
         categorical=tuple(sorted(categorical)),
         binary=tuple(sorted(binary)),
     )
+
+
+# MLflow 3.x odrzuca backend plikowy ("./mlruns") — jest w trybie utrzymaniowym
+# i `set_experiment` rzuca wyjątkiem, dopóki nie ustawi się MLFLOW_ALLOW_FILE_STORE.
+# Zamiast wchodzić w wycofywany backend, bierzemy SQLite: rejestr modeli i alias
+# @production i tak wymagają backendu bazodanowego. `mlflow.db` jest w .gitignore.
+# as_posix(): SQLAlchemy oczekuje ukośników, a nie windowsowych backslashy.
+MLFLOW_TRACKING_URI: str = f"sqlite:///{(PROJECT_ROOT / 'mlflow.db').as_posix()}"
+"""Wspólne źródło prawdy dla `train`, `registry` i `tune`.
+
+Mieszka tutaj, a nie w `train.py`, bo `registry.py` też go potrzebuje —
+import z `train` zrobiłby cykl.
+"""
