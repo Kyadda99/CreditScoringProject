@@ -10,10 +10,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any
 
-import numpy as np
-import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -26,7 +23,7 @@ from api.schemas import (
     ScoreResponse,
 )
 from artifact import load_bundle
-from config import FeatureGroups
+from predictor import Predictor
 
 # uvicorn konfiguruje wyłącznie własne loggery ("uvicorn", "uvicorn.access")
 # i zostawia root bez handlera na poziomie WARNING — przez co każdy
@@ -41,46 +38,6 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
-
-
-def to_frame(payload: dict[str, Any], input_groups: FeatureGroups) -> pd.DataFrame:
-    """Zamienia ciało żądania na jednowierszową ramkę SUROWYCH kolumn.
-
-    Buduje wiersz z kontraktu **wejściowego**, nie z grup modelu (spec D2):
-    model konsumuje cechy pochodne, których klient nie przysyła — liczy je
-    `FeatureEngineer` jako pierwszy krok pipeline'u. Budowanie z grup modelu
-    dałoby kolumny `CREDIT_INCOME_RATIO` wypełnione samymi NaN-ami.
-
-    Brakujące pola stają się NaN — dokładnie tym, co widział imputer w czasie
-    treningu. Kolejność kolumn bierzemy z kontraktu, a nie z żądania: kolejność
-    kluczy w JSON-ie jest przypadkowa.
-
-    Args:
-        payload: Zwalidowane ciało żądania, bez pól pustych.
-        input_groups: Kontrakt wejściowy odtworzony z artefaktu.
-
-    Returns:
-        Ramka o jednym wierszu i kolumnach `input_groups.all_features`.
-    """
-    row = {name: payload.get(name) for name in input_groups.all_features}
-    frame = pd.DataFrame([row], columns=list(input_groups.all_features))
-
-    # Bez tego kroku ramka ma dtype `object`, bo brakujące pola to `None`.
-    # `SimpleImputer` szuka `np.nan`, a w tablicy `object` `None != np.nan`, więc
-    # braków w ogóle NIE rozpoznaje: przepuszcza `None` dalej, a rzutowanie na
-    # float robi z nich NaN — i LogisticRegression wywala się na "Input X
-    # contains NaN". Kolumny numeryczne ratowała konwersja object->float w
-    # sklearn, kategoryczne handle_unknown="ignore"; flagi binarne nie miały
-    # żadnej z tych furtek i to one wywracały scoring.
-    numeric_like = [*input_groups.numeric, *input_groups.binary]
-    if numeric_like:
-        frame[numeric_like] = frame[numeric_like].astype("float64")
-    categorical = list(input_groups.categorical)
-    if categorical:
-        frame[categorical] = (
-            frame[categorical].astype(object).where(frame[categorical].notna(), np.nan)
-        )
-    return frame
 
 
 @asynccontextmanager
@@ -124,14 +81,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # przy treningu opisują decyzję podjętą PRZY TYM progu. Gdy Faza 3 go
     # dostroi, serwis pójdzie za artefaktem, zamiast cicho stosować inną regułę
     # niż ta, którą zmierzono. `CS_SCORE_THRESHOLD` nadal ma pierwszeństwo.
-    threshold = settings.score_threshold
-    source = "CS_SCORE_THRESHOLD"
-    if threshold is None:
-        threshold = float(bundle.metadata.get("threshold", 0.5))
-        source = "artefakt"
+    predictor = Predictor.from_settings(settings, bundle)
+    threshold = predictor.threshold
+    source = (
+        "CS_SCORE_THRESHOLD" if settings.score_threshold is not None else "artefakt"
+    )
 
     app.state.bundle = bundle
-    app.state.threshold = threshold
+    app.state.predictor = predictor
     app.state.settings = settings
     logger.info(
         "Model gotowy. ROC-AUC z treningu: %s, próg: %.2f (źródło: %s), "
@@ -213,16 +170,13 @@ def score(payload: ScoreRequest, request: Request) -> ScoreResponse:  # type: ig
     Raises:
         HTTPException: 500, gdy scoring się nie powiedzie.
     """
-    bundle = request.app.state.bundle
-    threshold = request.app.state.threshold
+    predictor = request.app.state.predictor
 
-    frame = to_frame(payload.model_dump(exclude_none=True), bundle.input_groups)
     try:
-        probability = float(bundle.pipeline.predict_proba(frame)[0, 1])
+        result = predictor.score(payload.model_dump(exclude_none=True))
     except ValueError as exc:
         # ValueError ze sklearn-a to niemal zawsze złe wejście, nie awaria
-        # serwera — 422, nie 500. Wcześniej łapał to bare `except` i każde
-        # takie żądanie wyglądało jak błąd po naszej stronie.
+        # serwera — 422, nie 500.
         logger.warning("Odrzucone wejście: %s", exc)
         raise HTTPException(status_code=422, detail="Invalid feature values.") from None
     except Exception:
@@ -232,9 +186,9 @@ def score(payload: ScoreRequest, request: Request) -> ScoreResponse:  # type: ig
         raise HTTPException(status_code=500, detail="Scoring failed.") from None
 
     return ScoreResponse(
-        probability=probability,
-        decision=probability >= threshold,
-        threshold=threshold,
+        probability=result.probability,
+        decision=result.decision,
+        threshold=result.threshold,
     )
 
 

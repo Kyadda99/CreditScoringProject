@@ -39,17 +39,14 @@ from sklearn.model_selection import (
 
 from artifact import DEFAULT_ARTIFACT_PATH, save_bundle
 from config import (
-    DROPPED_COLUMNS,
     ENGINEERED_FEATURES,
     MLFLOW_TRACKING_URI,
     RANDOM_STATE,
     FeatureGroups,
-    split_feature_groups,
 )
-from data import load_data
+from data_loader import DataLoader
 from evaluation import choose_threshold, evaluate
-from features import FeatureEngineer
-from models import get_models, get_sampler
+from preprocessor import Preprocessor
 from quality_gate import beats_incumbent, quality_gate
 from registry import (
     BUNDLE_ARTIFACT_PATH,
@@ -60,13 +57,10 @@ from registry import (
     promote,
     register,
 )
-from train import (
-    build_pipeline,
-    input_contract,
-    positive_ratio,
-    split,
-    write_feature_schema,
-)
+from settings import get_training_settings
+from strategies import get_estimator_strategy, get_imbalance_strategy
+from train import write_feature_schema
+from trainer import ModelTrainer
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -142,7 +136,7 @@ def build_objective(
     Returns:
         Funkcja `objective(trial) -> średnie CV PR-AUC`.
     """
-    ratio = positive_ratio(y)
+    ratio = ModelTrainer.positive_ratio(y)
 
     def objective(trial: optuna.Trial) -> float:
         params = {
@@ -154,13 +148,18 @@ def build_objective(
             "min_child_weight": trial.suggest_int("min_child_weight", 1, 20),
             "reg_lambda": trial.suggest_float("reg_lambda", 1e-3, 10.0, log=True),
         }
-        estimator = get_models(arm, scale_pos_weight=ratio)[TUNED_MODEL]
+        imbalance = get_imbalance_strategy(arm)
+        estimator = get_estimator_strategy(TUNED_MODEL).build(
+            class_weighted=imbalance.uses_class_weights, scale_pos_weight=ratio
+        )
         # n_jobs=1 na estymatorze: cross_val_score bierze -1, a zagnieżdżona
         # równoległość na 211 kolumnach walczy sama ze sobą o rdzenie i potrafi
         # być wolniejsza niż wariant jednowątkowy.
         estimator.set_params(**params, n_jobs=1)
 
-        pipeline = build_pipeline(groups, estimator, get_sampler(arm), features)
+        pipeline = Preprocessor(groups, features).build_pipeline(
+            estimator, imbalance.make_sampler()
+        )
         scores = cross_val_score(
             pipeline,
             X,
@@ -207,10 +206,10 @@ def tune(
         Zakończone badanie Optuny.
     """
     features = ENGINEERED_FEATURES if engineered else ()
-    X_train, X_test, y_train, y_test = split(load_data())
-    engineered_train = FeatureEngineer(features=features).fit_transform(X_train)
-    groups = split_feature_groups(engineered_train, dropped=DROPPED_COLUMNS)
-    inputs = input_contract(X_train)
+    loader = DataLoader.from_settings(get_training_settings())
+    X_train, X_test, y_train, y_test = loader.split(loader.load())
+    groups = loader.model_groups(X_train, features)
+    inputs = loader.input_contract(X_train)
 
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     mlflow.set_experiment(TUNE_EXPERIMENT_NAME)
@@ -246,13 +245,18 @@ def tune(
     logger.info("Najlepsze parametry: %s", study.best_params)
 
     # Refit na PEŁNYM zbiorze treningowym — nigdy na całości danych (spec D8).
-    ratio = positive_ratio(y_train)
-    estimator = get_models(arm, scale_pos_weight=ratio)[TUNED_MODEL]
+    ratio = ModelTrainer.positive_ratio(y_train)
+    imbalance = get_imbalance_strategy(arm)
+    estimator = get_estimator_strategy(TUNED_MODEL).build(
+        class_weighted=imbalance.uses_class_weights, scale_pos_weight=ratio
+    )
     estimator.set_params(**study.best_params)
 
     # Próg z predykcji out-of-fold na treningu — nigdy z testu (spec D4).
     oof_proba = cross_val_predict(
-        build_pipeline(groups, estimator, get_sampler(arm), features),
+        Preprocessor(groups, features).build_pipeline(
+            estimator, imbalance.make_sampler()
+        ),
         X_train,
         y_train,
         cv=StratifiedKFold(n_splits=CV_SPLITS, shuffle=True, random_state=RANDOM_STATE),
@@ -261,7 +265,9 @@ def tune(
     )[:, 1]
     threshold, _oof_cost = choose_threshold(y_train.to_numpy(), oof_proba)
 
-    pipeline = build_pipeline(groups, estimator, get_sampler(arm), features)
+    pipeline = Preprocessor(groups, features).build_pipeline(
+        estimator, imbalance.make_sampler()
+    )
     pipeline.fit(X_train, y_train)
     metrics = evaluate(
         y_test.to_numpy(), pipeline.predict_proba(X_test)[:, 1], threshold=threshold

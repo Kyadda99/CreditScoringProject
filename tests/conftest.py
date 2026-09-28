@@ -66,7 +66,7 @@ def synthetic_artifact(tmp_path_factory: pytest.TempPathFactory) -> Path:
     from artifact import save_bundle
     from config import DROPPED_COLUMNS, split_feature_groups
     from features import FeatureEngineer
-    from train import build_pipeline
+    from preprocessor import Preprocessor
 
     inputs = load_feature_groups()  # kontrakt WEJŚCIOWY — surowe kolumny
     rng = np.random.default_rng(0)
@@ -87,7 +87,7 @@ def synthetic_artifact(tmp_path_factory: pytest.TempPathFactory) -> Path:
     engineered = FeatureEngineer().fit_transform(frame)
     groups = split_feature_groups(engineered, dropped=DROPPED_COLUMNS)
 
-    pipeline = build_pipeline(groups).fit(frame, target)
+    pipeline = Preprocessor(groups).build_pipeline().fit(frame, target)
     path = tmp_path_factory.mktemp("artifact") / "pipeline.joblib"
     return save_bundle(
         pipeline,

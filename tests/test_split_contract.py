@@ -19,7 +19,7 @@ import pytest
 
 from config import ID_COLUMN
 from data import load_data
-from train import split
+from data_loader import DataLoader
 
 pytestmark = pytest.mark.requires_data
 
@@ -48,7 +48,7 @@ def _checksum(ids: pd.Series) -> str:
 
 def test_test_split_has_not_drifted() -> None:
     df = load_data()
-    _X_train, X_test, _y_train, _y_test = split(df)
+    _X_train, X_test, _y_train, _y_test = DataLoader().split(df)
     actual = _checksum(df.loc[X_test.index, ID_COLUMN])
     assert actual == EXPECTED_TEST_SET_SHA256, (
         f"Podział testowy się zmienił. Nowa suma: {actual}\n"
@@ -59,11 +59,11 @@ def test_test_split_has_not_drifted() -> None:
 
 def test_test_split_size_is_stable() -> None:
     df = load_data()
-    _X_train, X_test, _y_train, _y_test = split(df)
+    _X_train, X_test, _y_train, _y_test = DataLoader().split(df)
     assert len(X_test) == EXPECTED_TEST_ROWS
 
 
 def test_stratification_preserves_the_target_rate() -> None:
     df = load_data()
-    _X_train, _X_test, y_train, y_test = split(df)
+    _X_train, _X_test, y_train, y_test = DataLoader().split(df)
     assert abs(float(y_train.mean()) - float(y_test.mean())) < 0.005

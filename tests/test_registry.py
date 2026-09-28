@@ -192,8 +192,8 @@ def test_log_model_handles_our_custom_pipeline_types(tracking: str) -> None:
     import pandas as pd
 
     from config import ID_COLUMN, TARGET, FeatureGroups
-    from models import get_models
-    from train import build_pipeline
+    from preprocessor import Preprocessor
+    from strategies import get_estimator_strategy
 
     rng = np.random.default_rng(42)
     n = 240
@@ -216,8 +216,14 @@ def test_log_model_handles_our_custom_pipeline_types(tracking: str) -> None:
 
     # Pipeline z NASZYM transformerem i XGBoostem — dokładnie ten skład,
     # na którym padł prawdziwy bieg.
-    pipeline = build_pipeline(groups, estimator=get_models()["xgboost"]).fit(
-        frame, target
+    pipeline = (
+        Preprocessor(groups)
+        .build_pipeline(
+            estimator=get_estimator_strategy("xgboost").build(
+                class_weighted=False, scale_pos_weight=1.0
+            )
+        )
+        .fit(frame, target)
     )
 
     with mlflow.start_run() as run:

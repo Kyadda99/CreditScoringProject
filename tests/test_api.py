@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from api import app as app_module
 from api.config import get_settings
 from config import FeatureGroups
+from predictor import Predictor
 
 # UWAGA: NIE ma tu `pytestmark` na cały moduł. Wcześniej był i pomijał w CI
 # wszystkie 10 testów HTTP, bo `requires_data` zależy od 158 MB CSV — czyli
@@ -101,7 +102,7 @@ def test_to_frame_produces_training_column_order() -> None:
         categorical=("NAME_CONTRACT_TYPE",),
         binary=("FLAG_MOBIL",),
     )
-    frame = app_module.to_frame({"AMT_INCOME_TOTAL": 1000.0}, groups)
+    frame = Predictor.build_frame({"AMT_INCOME_TOTAL": 1000.0}, groups)
     assert list(frame.columns) == list(groups.all_features)
     assert len(frame) == 1
     assert pd.isna(frame.loc[0, "NAME_CONTRACT_TYPE"])
@@ -119,7 +120,7 @@ def test_to_frame_gives_numeric_and_binary_columns_a_float_dtype() -> None:
         categorical=("NAME_CONTRACT_TYPE",),
         binary=("FLAG_MOBIL",),
     )
-    frame = app_module.to_frame({}, groups)
+    frame = Predictor.build_frame({}, groups)
     assert frame["AMT_INCOME_TOTAL"].dtype == "float64"
     assert frame["FLAG_MOBIL"].dtype == "float64"
     assert frame["FLAG_MOBIL"].isna().all(), "brak musi być NaN, nie None"
@@ -138,7 +139,7 @@ def test_empty_payload_leaves_no_nan_after_preprocessing(
     from artifact import load_bundle
 
     bundle = load_bundle(synthetic_artifact)
-    frame = app_module.to_frame({}, bundle.groups)
+    frame = Predictor.build_frame({}, bundle.groups)
     transformed = bundle.pipeline.named_steps["preprocessor"].transform(frame)
     assert np.isfinite(np.asarray(transformed, dtype=float)).all()
 
@@ -267,7 +268,7 @@ def test_engineered_feature_names_are_rejected_as_input() -> None:
 
 def test_to_frame_builds_the_row_from_the_input_contract() -> None:
     inputs = FeatureGroups(numeric=("AMT_CREDIT",), categorical=("X",), binary=())
-    frame = app_module.to_frame({"AMT_CREDIT": 1.0}, inputs)
+    frame = Predictor.build_frame({"AMT_CREDIT": 1.0}, inputs)
     assert list(frame.columns) == ["AMT_CREDIT", "X"]
 
 
@@ -285,10 +286,10 @@ def test_sentinel_is_decoded_inside_the_served_pipeline(client: TestClient) -> N
 
     base = {"AMT_INCOME_TOTAL": 202500.0, "AMT_CREDIT": 406597.5}
     employed = engineer.transform(
-        app_module.to_frame({**base, "DAYS_EMPLOYED": -637.0}, inputs)
+        Predictor.build_frame({**base, "DAYS_EMPLOYED": -637.0}, inputs)
     )
     idle = engineer.transform(
-        app_module.to_frame({**base, "DAYS_EMPLOYED": 365243.0}, inputs)
+        Predictor.build_frame({**base, "DAYS_EMPLOYED": 365243.0}, inputs)
     )
 
     assert employed["FLAG_NOT_EMPLOYED"].iloc[0] == 0.0
