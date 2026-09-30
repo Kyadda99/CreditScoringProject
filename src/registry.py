@@ -1,16 +1,12 @@
-"""Cienkie opakowanie na MLflow Model Registry.
+"""Thin wrapper over the MLflow Model Registry.
 
-Aliasy, nie wycofane "stages" (`CLAUDE.md`, MLflow 3.x). Rejestr trzyma
-**jeden** model o nazwie `credit-scoring`, którego wersje są kolejnymi
-championami — alias `@production` wskazuje dokładnie jeden z nich (spec D6).
+Aliases, not the retired stages. The registry holds one model named
+`credit-scoring` whose versions are successive champions; the `@production`
+alias points at exactly one of them.
 
-Projekt referencyjny instruktora rejestruje osobną nazwę per algorytm, co
-dałoby tutaj trzy konkurujące aliasy `@production` znaczące trzy różne rzeczy.
-
-**Rejestr jest sprawą treningową** (spec D7): kontener nie zna MLflow i nie
-sięga po sieć przy starcie. Champion trafia do obrazu przez `export_champion`
-jako zwykły joblib, ale z zapisanym pochodzeniem — wersją rejestru i biegiem,
-z którego wyszedł.
+The registry is a training-side concern: the container does not use MLflow and
+does not reach the network at startup. The champion enters the image through
+`export_champion` as a plain joblib file, with its provenance recorded.
 """
 
 from __future__ import annotations
@@ -30,85 +26,83 @@ from config import MLFLOW_TRACKING_URI
 logger = logging.getLogger(__name__)
 
 REGISTERED_MODEL_NAME = "credit-scoring"
-"""Jedna nazwa w rejestrze; wersje to kolejne generacje championa."""
+"""One registry name; versions are successive champion generations."""
 
 PRODUCTION_ALIAS = "production"
-"""Alias wskazujący model, który ma pojechać do kontenera."""
+"""Alias marking the model that ships to the container."""
 
 MODEL_ARTIFACT_PATH = "model"
-"""Ścieżka artefaktu sklearn wewnątrz biegu — `runs:/<id>/model`.
+"""sklearn artifact path inside the run: `runs:/<id>/model`.
 
-Musi zgadzać się z `name=` przekazanym do `mlflow.sklearn.log_model`,
-inaczej `register` nie znajdzie czego rejestrować.
+Must match the `name=` passed to `mlflow.sklearn.log_model`, or `register`
+finds nothing to register.
 """
 
 BUNDLE_ARTIFACT_PATH = "bundle"
-"""Katalog artefaktu z `Bundle` wewnątrz biegu (spec D7)."""
+"""Artifact directory holding the `Bundle` inside the run."""
 
 BUNDLE_FILENAME = "pipeline.joblib"
-"""Nazwa pliku artefaktu wewnątrz katalogu `bundle/`."""
+"""Artifact file name inside the `bundle/` directory."""
 
 SERIALIZATION_FORMAT = "cloudpickle"
-"""Format zapisu modelu sklearn w MLflow.
+"""Serialization format for the sklearn model in MLflow.
 
-MLflow 3.15 domyślnie używa **skops**, który odmawia serializacji klas spoza
-listy zaufanych i wywala się na naszym pipelinie:
+MLflow 3.15 defaults to skops, which refuses to serialize classes outside its
+trusted list and fails on this pipeline:
 
     UntrustedTypesFoundException: Untrusted types found in the file:
     ['features.FeatureEngineer', 'numpy.dtype', 'xgboost.core.Booster',
      'xgboost.sklearn.XGBClassifier']
 
-Alternatywą było wyliczenie `skops_trusted_types`, ale ta lista musiałaby być
-aktualizowana przy każdej zmianie składu pipeline'u — cichy błąd czekający na
-Fazę 4, która dokłada model PyTorch.
+Listing `skops_trusted_types` was the alternative, but that list would need
+updating on every change to the pipeline's composition.
 
-Argument bezpieczeństwa za skops tutaj nie obowiązuje: produkujemy i wczytujemy
-wyłącznie własne artefakty, a kontener i tak ładuje `joblib` (spec D7). Trzymanie
-kopii rejestrowej w skops, gdy wdrażana kopia jest picklem, byłoby teatrem.
+The security argument for skops does not apply here: this project produces and
+loads only its own artifacts, and the container loads joblib regardless.
 """
 
 
 def _client() -> MlflowClient:
-    """Zwraca klienta wskazującego współdzielony backend SQLite.
+    """Return a client pointing at the shared SQLite backend.
 
-    Tworzony przy każdym wywołaniu, a nie jako singleton modułu: testy
-    podmieniają URI, a singleton zapamiętałby ten sprzed podmiany.
+    Built on every call rather than as a module singleton: tests swap the URI,
+    and a singleton would hold the one from before the swap.
 
     Returns:
-        Klient MLflow.
+        An MLflow client.
     """
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     return MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
 
 
 def register(run_id: str, name: str = REGISTERED_MODEL_NAME) -> ModelVersion:
-    """Rejestruje model zalogowany w danym biegu.
+    """Register the model logged in the given run.
 
     Args:
-        run_id: Bieg, w którym `mlflow.sklearn.log_model(..., name="model")`
-            zapisał pipeline.
-        name: Nazwa w rejestrze.
+        run_id: Run in which `mlflow.sklearn.log_model(..., name="model")`
+            wrote the pipeline.
+        name: Registry name.
 
     Returns:
-        Utworzona wersja modelu.
+        The created model version.
     """
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     mv = mlflow.register_model(
         model_uri=f"runs:/{run_id}/{MODEL_ARTIFACT_PATH}", name=name
     )
-    logger.info("Zarejestrowano %s v%s (bieg %s)", name, mv.version, run_id[:8])
+    logger.info("Registered %s v%s (run %s)", name, mv.version, run_id[:8])
     return mv
 
 
 def promote(mv: ModelVersion, alias: str = PRODUCTION_ALIAS) -> None:
-    """Przypina alias do wskazanej wersji.
+    """Point the alias at the given version.
 
-    Alias jest przenoszony, a nie dublowany — po tym wywołaniu `@production`
-    wskazuje dokładnie jedną wersję.
+    The alias is moved, not duplicated: after this call `@production` points at
+    exactly one version.
 
     Args:
-        mv: Wersja zwrócona przez `register`.
-        alias: Nazwa aliasu.
+        mv: Version returned by `register`.
+        alias: Alias name.
     """
     _client().set_registered_model_alias(name=mv.name, alias=alias, version=mv.version)
     logger.info("%s v%s -> @%s", mv.name, mv.version, alias)
@@ -117,34 +111,34 @@ def promote(mv: ModelVersion, alias: str = PRODUCTION_ALIAS) -> None:
 def load_production(
     name: str = REGISTERED_MODEL_NAME, alias: str = PRODUCTION_ALIAS
 ) -> Pipeline:
-    """Wczytuje model spod aliasu.
+    """Load the model behind the alias.
 
-    Używane po stronie **treningu** (np. do porównania z nowym kandydatem).
-    API tego nie woła — kontener ładuje joblib, nie rejestr (spec D7).
+    Used on the training side, for example to compare against a new candidate.
+    The API never calls it: the container loads joblib, not the registry.
 
     Args:
-        name: Nazwa w rejestrze.
+        name: Registry name.
         alias: Alias.
 
     Returns:
-        Dopasowany pipeline.
+        The fitted pipeline.
     """
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     return mlflow.sklearn.load_model(f"models:/{name}@{alias}")
 
 
 def list_models(name: str | None = None) -> None:
-    """Wypisuje do logu zarejestrowane modele, ich wersje i aliasy.
+    """Log the registered models, their versions and aliases.
 
     Args:
-        name: Ogranicza do jednej nazwy; `None` pokazuje wszystkie.
+        name: Restrict to one name; `None` shows all.
     """
     client = _client()
     names = [name] if name else [m.name for m in client.search_registered_models()]
     for model_name in names:
         registered = client.get_registered_model(model_name)
-        # Aliasy mieszkają na MODELU (alias -> wersja), nie na wersji, więc
-        # odwracamy mapę, żeby wypisać je przy odpowiednim wierszu.
+        # Aliases live on the model (alias -> version), not on the version,
+        # so the map is inverted to print them on the matching row.
         by_version: dict[str, list[str]] = {}
         for alias, version in registered.aliases.items():
             by_version.setdefault(version, []).append(f"@{alias}")
@@ -153,7 +147,7 @@ def list_models(name: str | None = None) -> None:
             key=lambda v: int(v.version),
         ):
             logger.info(
-                "%-20s v%-3s %-14s bieg %s",
+                "%-20s v%-3s %-14s run %s",
                 model_name,
                 mv.version,
                 ", ".join(by_version.get(mv.version, [])) or "-",
@@ -166,27 +160,27 @@ def export_champion(
     alias: str = PRODUCTION_ALIAS,
     dest: Path = DEFAULT_ARTIFACT_PATH,
 ) -> Path:
-    """Wyciąga z rejestru artefakt championa i zapisuje go jako joblib.
+    """Pull the champion artifact from the registry and write it as joblib.
 
-    To jest spoina między rejestrem a kontenerem (spec D7). Alias wskazuje
-    wersję, wersja zna swój bieg, a bieg zawiera **dokładnie ten** `Bundle`,
-    który ta wersja opisuje. Dzięki temu plik w `models/` ma udokumentowane
-    pochodzenie, zamiast być "tym, co akurat leżało na dysku".
+    This is the seam between the registry and the container. The alias points
+    at a version, the version knows its run, and the run holds exactly the
+    `Bundle` that version describes, so the file in `models/` has documented
+    provenance.
 
-    Numer wersji powstaje dopiero PRZY rejestracji, więc nie mógł znaleźć się
-    w `Bundle` logowanym wcześniej — dopisujemy go tutaj i zapisujemy ponownie.
+    The version number exists only after registration, so it could not be in
+    the `Bundle` logged earlier; it is added here and the file rewritten.
 
     Args:
-        name: Nazwa w rejestrze.
-        alias: Alias championa.
-        dest: Docelowa ścieżka joblib.
+        name: Registry name.
+        alias: Champion alias.
+        dest: Destination joblib path.
 
     Returns:
-        Ścieżka zapisanego artefaktu.
+        Path of the written artifact.
     """
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     mv = _client().get_model_version_by_alias(name, alias)
-    logger.info("Champion: %s v%s (bieg %s)", name, mv.version, (mv.run_id or "")[:8])
+    logger.info("Champion: %s v%s (run %s)", name, mv.version, (mv.run_id or "")[:8])
 
     local = mlflow.artifacts.download_artifacts(
         run_id=mv.run_id, artifact_path=f"{BUNDLE_ARTIFACT_PATH}/{BUNDLE_FILENAME}"
@@ -202,17 +196,17 @@ def export_champion(
     path = save_bundle(
         bundle.pipeline, bundle.groups, bundle.input_groups, metadata, dest
     )
-    logger.info("Wyeksportowano championa do %s", path)
+    logger.info("Exported champion to %s", path)
     return path
 
 
 def cli() -> None:
-    """Wejście `uv run cs-export`."""
+    """Entry point for `uv run cs-export`."""
     import argparse
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     parser = argparse.ArgumentParser(
-        description="Eksportuje championa z rejestru do models/pipeline.joblib."
+        description="Export the champion from the registry to models/pipeline.joblib."
     )
     parser.add_argument("--alias", default=PRODUCTION_ALIAS)
     parser.add_argument("--name", default=REGISTERED_MODEL_NAME)
@@ -225,23 +219,23 @@ def cli() -> None:
 def production_metrics(
     name: str = REGISTERED_MODEL_NAME, alias: str = PRODUCTION_ALIAS
 ) -> dict[str, float] | None:
-    """Zwraca metryki modelu stojącego obecnie pod aliasem.
+    """Return the metrics of the model currently behind the alias.
 
-    Potrzebne, żeby `beats_incumbent` mogło porównać kandydata z obecnym
-    championem, zamiast promować bezwarunkowo.
+    Needed so `beats_incumbent` can compare a candidate against the current
+    champion instead of promoting unconditionally.
 
     Args:
-        name: Nazwa w rejestrze.
-        alias: Alias championa.
+        name: Registry name.
+        alias: Champion alias.
 
     Returns:
-        Metryki biegu, z którego pochodzi wskazana wersja, albo `None`,
-        gdy aliasu (lub całego modelu) jeszcze nie ma.
+        Metrics of the run the version came from, or `None` when the alias,
+        or the model itself, does not exist yet.
     """
     client = _client()
     try:
         mv = client.get_model_version_by_alias(name, alias)
     except MlflowException:
-        logger.info("Brak aliasu @%s dla %s — to pierwszy champion.", alias, name)
+        logger.info("No @%s alias for %s; this is the first champion.", alias, name)
         return None
     return dict(client.get_run(mv.run_id).data.metrics)

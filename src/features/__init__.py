@@ -1,10 +1,9 @@
-"""Inżynieria cech: czyste funkcje plus transformer, który je składa.
+"""Feature engineering: pure functions plus the transformer that applies them.
 
-Transformer jest **pierwszym krokiem** `Pipeline` (spec D1), przed
-`ColumnTransformer`. Dzięki temu cała derywacja jedzie w jednym artefakcie
-joblib: `/score` przyjmuje surowe kolumny, a kontener liczy cechy sam. Nie ma
-drugiego miejsca wywołania, które mogłoby się rozjechać z treningiem — a to
-właśnie ten błąd Faza 1 usuwała ustaleniem M4.
+The transformer is the first `Pipeline` step, before the `ColumnTransformer`,
+so all derivation travels in one joblib artifact: `/score` accepts raw columns
+and the container computes the features itself. There is no second call site
+that could drift from training.
 """
 
 from __future__ import annotations
@@ -22,7 +21,7 @@ from features.ratios import RATIO_FUNCTIONS
 logger = logging.getLogger(__name__)
 
 FLAG_NOT_EMPLOYED = "FLAG_NOT_EMPLOYED"
-"""Nazwa flagi dodawanej zawsze — także w transzy bez ilorazów (spec D7)."""
+"""Flag added on every transform, including when no ratios are computed."""
 
 _REQUIRED_AT_FIT: tuple[str, ...] = (
     "AMT_ANNUITY",
@@ -33,74 +32,72 @@ _REQUIRED_AT_FIT: tuple[str, ...] = (
     "DAYS_BIRTH",
     "DAYS_EMPLOYED",
 )
-"""Kolumny, bez których ramka TRENINGOWA jest niekompletna.
+"""Columns without which the training frame is incomplete.
 
-Przy `transform` brak kolumny jest dozwolony — pola `/score` są opcjonalne
-i imputer je obsłuży. Przy `fit` to usterka pipeline'u i musi być głośna.
+At `transform` a missing column is allowed: `/score` fields are optional and
+the imputer handles them. At `fit` it is a pipeline fault and must be loud.
 """
 
 
 class FeatureEngineer(BaseEstimator, TransformerMixin):
-    """Dokłada cechy pochodne i dekoduje sentinele. Bez stanu uczonego.
+    """Adds derived features and decodes sentinels. No learned state.
 
-    Krok jest bezstanowy z rozmysłem: gdyby liczył cokolwiek na danych (średnie,
-    progi), musiałby to robić wyłącznie na foldzie treningowym, a `Pipeline`
-    i tak by tego pilnował. Tu nie ma czego pilnować — te same wejścia dają ten
-    sam wynik w treningu i w serwowaniu.
+    The step is deliberately stateless: anything learned from the data would
+    have to be learned on the training fold alone, and `Pipeline` would have to
+    police that. With no state there is nothing to police.
 
     Attributes:
-        features: Nazwy cech pochodnych do policzenia. Pusta krotka oznacza
-            "tylko czyszczenie" — tak realizowana jest transza 1 ze spec D7.
+        features: Names of the derived features to compute. An empty tuple
+            means cleaning only.
     """
 
     def __init__(self, features: tuple[str, ...] = ENGINEERED_FEATURES) -> None:
-        """Zapamiętuje wybór cech pochodnych.
+        """Store the choice of derived features.
 
         Args:
-            features: Nazwy cech z `RATIO_FUNCTIONS` do policzenia.
+            features: Names from `RATIO_FUNCTIONS` to compute.
         """
-        # Bez normalizacji i bez walidacji: `sklearn.base.clone` odtwarza obiekt
-        # z `get_params()` i porównuje atrybuty z tym, co dostał __init__.
+        # No normalisation or validation: sklearn.base.clone rebuilds the
+        # object from get_params() and compares attributes against __init__.
         self.features = features
 
     def fit(self, X: pd.DataFrame, y: object = None) -> FeatureEngineer:
-        """Zapamiętuje kolumny wejściowe i sprawdza kompletność ramki.
+        """Record the input columns and check the frame is complete.
 
-        Ramka treningowa bez kolumny źródłowej to usterka pipeline'u — inaczej
-        niż przy `transform`, gdzie brak pola jest normalnym stanem żądania.
+        A training frame missing a source column is a pipeline fault, unlike
+        `transform`, where an absent field is a normal request state.
 
         Args:
-            X: Ramka treningowa.
-            y: Ignorowane; sygnatura wymagana przez sklearn.
+            X: Training frame.
+            y: Ignored; required by the sklearn signature.
 
         Returns:
             `self`.
 
         Raises:
-            ValueError: Gdy ramce treningowej brakuje kolumny źródłowej.
+            ValueError: When the training frame lacks a source column.
         """
         missing = [c for c in _REQUIRED_AT_FIT if c not in X.columns]
         if missing:
             raise ValueError(
-                "Ramka treningowa nie ma kolumn źródłowych: " + ", ".join(missing)
+                "Training frame is missing source columns: " + ", ".join(missing)
             )
         self.feature_names_in_ = np.asarray(X.columns, dtype=object)
         self.n_features_in_ = X.shape[1]
         return self
 
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:
-        """Zwraca kopię ramki z odkodowanym sentinelem i dołożonymi cechami.
+        """Return a copy with the sentinel decoded and features added.
 
-        Nigdy nie rzuca na danych żądania: brak kolumny daje cechę NaN, którą
-        dopasowany imputer obsłuży — pola `/score` są opcjonalne (Faza 1, D1).
+        Never raises on request data: a missing column yields a NaN feature for
+        the fitted imputer, because `/score` fields are optional.
 
         Args:
-            X: Ramka surowych kolumn.
+            X: Frame of raw columns.
 
         Returns:
-            Nowa ramka: kolumny wejściowe (z `DAYS_EMPLOYED` po dekodowaniu),
-            `FLAG_NOT_EMPLOYED`, a potem cechy z `self.features` w podanej
-            kolejności.
+            A new frame: the input columns with `DAYS_EMPLOYED` decoded, then
+            `FLAG_NOT_EMPLOYED`, then `self.features` in order.
         """
         frame = X.copy()
         if "DAYS_EMPLOYED" in frame.columns:
@@ -111,13 +108,13 @@ class FeatureEngineer(BaseEstimator, TransformerMixin):
         return frame
 
     def get_feature_names_out(self, input_features: object = None) -> np.ndarray:
-        """Nazwy kolumn, jakie produkuje `transform`.
+        """Column names `transform` produces.
 
         Args:
-            input_features: Ignorowane; nazwy pochodzą z `fit`.
+            input_features: Ignored; the names come from `fit`.
 
         Returns:
-            Tablica nazw w kolejności wyjściowej.
+            An array of names in output order.
         """
         base = list(self.feature_names_in_)
         return np.asarray([*base, FLAG_NOT_EMPLOYED, *self.features], dtype=object)

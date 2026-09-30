@@ -1,11 +1,9 @@
-"""Funkcje analityczne EDA — liczą, nie rysują.
+"""EDA analysis functions: they compute, they do not plot.
 
-Notebook jest cienkim sterownikiem nad tym modułem (spec D6). Powód: to, co
-mieszka w notebooku, nie jest testowalne, a liczby przepisane stamtąd do
-`docs/findings/02-eda.md` starzeją się przy pierwszym ponownym uruchomieniu.
-Tutaj każda tabela powstaje z kodu, który CI wykonuje na ramkach syntetycznych.
+The notebook is a thin driver over this module. Every table comes from code,
+which CI exercises on synthetic frames.
 
-Żadna funkcja nie czyta z dysku, nie rysuje i nie modyfikuje wejścia.
+No function reads from disk, draws, or modifies its input.
 """
 
 from __future__ import annotations
@@ -17,14 +15,14 @@ from config import TARGET
 
 
 def missingness_report(df: pd.DataFrame) -> pd.DataFrame:
-    """Braki danych per kolumna, od najgorszej.
+    """Missing values per column, worst first.
 
     Args:
-        df: Dowolna ramka.
+        df: Any frame.
 
     Returns:
-        Ramka z kolumnami `column`, `dtype`, `n_missing`, `pct_missing`,
-        posortowana malejąco po `pct_missing`.
+        A frame of `column`, `dtype`, `n_missing`, `pct_missing`, sorted
+        descending by `pct_missing`.
     """
     missing = df.isna().sum()
     report = pd.DataFrame(
@@ -39,17 +37,16 @@ def missingness_report(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def cardinality_report(df: pd.DataFrame) -> pd.DataFrame:
-    """Liczność kategorii dla kolumn nieliczbowych.
+    """Category counts for non-numeric columns.
 
-    Faza 4 wymiaruje z tej tabeli `nn.Embedding` — dlatego trafia ona do pliku
-    findings, a nie tylko na ekran notebooka.
+    Intended for sizing categorical embeddings; numeric columns are skipped.
 
     Args:
-        df: Dowolna ramka.
+        df: Any frame.
 
     Returns:
-        Ramka `column`, `n_unique`, `top_value`, `top_share` (udział
-        najczęstszej wartości wśród wartości nie-NaN), malejąco po `n_unique`.
+        A frame of `column`, `n_unique`, `top_value`, `top_share` (share of the
+        most frequent value among non-NaN values), descending by `n_unique`.
     """
     rows: list[dict[str, object]] = []
     for column in df.columns:
@@ -76,20 +73,19 @@ def cardinality_report(df: pd.DataFrame) -> pd.DataFrame:
 def target_rate_by_bin(
     df: pd.DataFrame, column: str, bins: int = 10, target: str = TARGET
 ) -> pd.DataFrame:
-    """Udział klasy pozytywnej w kwantylowych koszykach kolumny.
+    """Positive-class rate across quantile bins of a column.
 
-    Kwantyle, nie równe szerokości: rozkłady kwot w tym zbiorze są skrajnie
-    skośne, a przy równych szerokościach 99% wierszy wpada do pierwszego
-    koszyka i wykres nic nie pokazuje.
+    Quantiles, not equal widths: the amount distributions are highly skewed,
+    and equal widths put 99% of rows in the first bin.
 
     Args:
-        df: Ramka zawierająca `column` i `target`.
-        column: Nazwa kolumny liczbowej.
-        bins: Liczba koszyków.
-        target: Nazwa kolumny celu.
+        df: Frame containing `column` and `target`.
+        column: Name of the numeric column.
+        bins: Number of bins.
+        target: Name of the target column.
 
     Returns:
-        Ramka `bin`, `n`, `target_rate` — jeden wiersz na koszyk.
+        A frame of `bin`, `n`, `target_rate`, one row per bin.
     """
     buckets = pd.qcut(df[column], q=bins, duplicates="drop")
     grouped = df.groupby(buckets, observed=True)[target].agg(["size", "mean"])
@@ -103,18 +99,18 @@ def target_rate_by_bin(
 
 
 def correlation_screen(df: pd.DataFrame, threshold: float = 0.9) -> pd.DataFrame:
-    """Pary kolumn liczbowych skorelowane powyżej progu.
+    """Numeric column pairs correlated above a threshold.
 
-    Służy do wyłapania redundancji — w tym zbiorze bloki `_AVG` / `_MEDI` /
-    `_MODE` opisują to samo trzy razy.
+    Finds redundancy; in this dataset the `_AVG` / `_MEDI` / `_MODE` blocks
+    describe the same quantity three times.
 
     Args:
-        df: Ramka; kolumny nieliczbowe są pomijane.
-        threshold: Próg wartości bezwzględnej korelacji Pearsona.
+        df: Frame; non-numeric columns are skipped.
+        threshold: Absolute Pearson correlation threshold.
 
     Returns:
-        Ramka `left`, `right`, `correlation`, malejąco. Każda para raz —
-        brany jest górny trójkąt macierzy, nie cała macierz.
+        A frame of `left`, `right`, `correlation`, descending. Each pair once,
+        taken from the upper triangle.
     """
     numeric = df.select_dtypes(include="number")
     corr = numeric.corr(numeric_only=True).abs()

@@ -1,7 +1,7 @@
-"""Testy przeszukiwania hiperparametrów.
+"""Hyperparameter search tests.
 
-Wszystko na małych ramkach syntetycznych i przy dwóch próbach — sprawdzamy
-kontrakt funkcji i powtarzalność, a nie jakość strojenia.
+All on small synthetic frames with two trials: this checks the function
+contract and reproducibility, not tuning quality.
 """
 
 from __future__ import annotations
@@ -13,12 +13,12 @@ import pytest
 
 from config import ID_COLUMN, TARGET, FeatureGroups
 
-# Optuna loguje każdą próbę na INFO; w testach to tylko szum.
+# Optuna logs every trial at INFO; in tests that is only noise.
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 
 def _frame(n: int = 240, rate: float = 0.25) -> tuple[pd.DataFrame, pd.Series]:
-    """Ramka z kompletem kolumn źródłowych wymaganych przez FeatureEngineer.fit."""
+    """A frame with every source column FeatureEngineer.fit requires."""
     rng = np.random.default_rng(42)
     target = pd.Series(rng.binomial(1, rate, n), name=TARGET)
     frame = pd.DataFrame(
@@ -31,7 +31,7 @@ def _frame(n: int = 240, rate: float = 0.25) -> tuple[pd.DataFrame, pd.Series]:
             "CNT_FAM_MEMBERS": rng.integers(1, 4, size=n).astype(float),
             "DAYS_BIRTH": -rng.integers(7000, 20000, size=n).astype(float),
             "DAYS_EMPLOYED": -rng.integers(100, 5000, size=n).astype(float),
-            # sygnał, żeby PR-AUC nie był czystym szumem
+            # signal, so PR-AUC is not pure noise
             "EXT_SOURCE_2": rng.random(n) * 0.5 + target * 0.4,
         }
     ).drop(columns=[ID_COLUMN])
@@ -47,10 +47,10 @@ def _groups() -> FeatureGroups:
 
 
 def test_subsample_keeps_the_class_ratio() -> None:
-    """Podpróbka ma być stratyfikowana — inaczej strojenie widzi inny problem.
+    """The subsample must be stratified, or tuning sees a different problem.
 
-    Przy 8% klasy dodatniej losowa podpróbka potrafi przesunąć bazową częstość
-    na tyle, że optymalizujemy pod inny rozkład niż ten, który potem trenujemy.
+    At 8% positives a random subsample can shift the base rate enough that the
+    optimisation targets a different distribution from the one later trained.
     """
     from tune import subsample
 
@@ -82,7 +82,7 @@ def test_objective_returns_a_float_in_unit_range() -> None:
 
 
 def test_study_is_reproducible() -> None:
-    """TPESampler(seed=42): dwa identyczne przebiegi dają te same parametry."""
+    """TPESampler(seed=42): two identical runs give the same parameters."""
     from tune import build_objective, make_study
 
     frame, target = _frame()
@@ -98,7 +98,7 @@ def test_study_is_reproducible() -> None:
 
 
 def test_objective_searches_the_declared_parameters() -> None:
-    """Budżet i przestrzeń są zadeklarowane (spec D8), więc pinujemy je testem."""
+    """The budget and the space are declared, so a test pins them."""
     from tune import build_objective
 
     frame, target = _frame()
@@ -118,7 +118,7 @@ def test_objective_searches_the_declared_parameters() -> None:
 
 
 def test_declared_budget_matches_the_spec() -> None:
-    """30 prób, 3 foldy, 25% podpróbki — deklaracja, nie odkrycie w trakcie."""
+    """30 trials, 3 folds, a 25% subsample: declared, not discovered."""
     from tune import CV_SPLITS, N_TRIALS, SUBSAMPLE_FRACTION
 
     assert N_TRIALS == 30

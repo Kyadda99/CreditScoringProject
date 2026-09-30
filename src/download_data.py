@@ -1,15 +1,13 @@
-"""Pobiera `application_train.csv` z konkursu Home Credit Default Risk.
+"""Download `application_train.csv` from the Home Credit Default Risk competition.
 
-Uruchamiane raz na maszynę; plik trafia do `data/raw/` (gitignored). Skrypt jest
-idempotentny — jeśli plik już istnieje, nic nie pobiera.
+Run once per machine; the file lands in `data/raw/` (gitignored). The script is
+idempotent: if the file already exists it downloads nothing.
 
-Wymaga poświadczeń Kaggle. Podaje się je na jeden z dwóch sposobów:
-skopiować `.env.example` do `.env` i wypełnić `KAGGLE_USERNAME`/`KAGGLE_KEY`,
-albo zostawić `~/.kaggle/kaggle.json` z witryny Kaggle. Zmienne z `.env` mają
-pierwszeństwo — `kagglehub` sprawdza środowisko przed plikiem.
+Requires Kaggle credentials, either in `.env` or in `~/.kaggle/kaggle.json`.
+Environment variables win: kagglehub checks the environment before the file.
 
-Konkurs wymaga dodatkowo **wcześniejszej akceptacji regulaminu w przeglądarce**,
-w przeciwnym razie API zwróci 403 mimo poprawnych kluczy:
+The competition rules must also be accepted in a browser first, or the API
+returns 403 even with valid keys:
 https://www.kaggle.com/competitions/home-credit-default-risk/rules
 
 Usage:
@@ -28,13 +26,10 @@ from dotenv import load_dotenv
 
 from config import PROJECT_ROOT, RAW_DATA_DIR
 
-# `kagglehub` czyta KAGGLE_USERNAME/KAGGLE_KEY ze środowiska procesu i nie wie
-# nic o plikach `.env`. Bez tej linii poprawnie wypełniony `.env` byłby po cichu
-# ignorowany, a skrypt padłby na "User is not authenticated" — czyli dokładnie
-# tym samym błędem, co przy braku poświadczeń. Ścieżka jest liczona od
-# PROJECT_ROOT, a nie od cwd, żeby `uv run cs-download` działało z podkatalogu.
-# `override=False`: zmienne ustawione naprawdę w powłoce wygrywają, więc `.env`
-# jest wygodą lokalną, a nie nadpisaniem środowiska CI.
+# kagglehub reads KAGGLE_USERNAME/KAGGLE_KEY from the process environment
+# and knows nothing about .env files. The path is resolved from PROJECT_ROOT,
+# not cwd, so cs-download works from a subdirectory. override=False keeps real
+# shell variables winning, so .env is a local convenience, not a CI override.
 load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -47,19 +42,19 @@ DEST = DEST_DIR / FILENAME
 
 
 def _materialise(cached: Path, dest: Path) -> None:
-    """Kładzie prawdziwy CSV pod `dest`, rozpakowując go w razie potrzeby.
+    """Place the real CSV at `dest`, unpacking it when needed.
 
-    `kagglehub.competition_download` dla pojedynczego pliku z konkursu zwraca
-    **archiwum ZIP**, a nie CSV — mimo że ścieżka kończy się na `.csv`. Zwykłe
-    skopiowanie dawało 36 MB archiwum pod nazwą `application_train.csv`;
-    `pd.read_csv` wywracał się na nim daleko od przyczyny.
+    For a single competition file `kagglehub.competition_download` returns a
+    ZIP archive, not a CSV, even though the path ends in `.csv`. Copying it
+    directly produced a 36 MB archive named `application_train.csv`, on which
+    `pd.read_csv` failed far from the cause.
 
     Args:
-        cached: Ścieżka zwrócona przez kagglehub — ZIP albo goły CSV.
-        dest: Docelowa ścieżka CSV.
+        cached: Path returned by kagglehub: a ZIP or a bare CSV.
+        dest: Destination CSV path.
 
     Raises:
-        SystemExit: Gdy archiwum nie zawiera oczekiwanego pliku.
+        SystemExit: When the archive does not contain the expected file.
     """
     if not zipfile.is_zipfile(cached):
         shutil.copy2(cached, dest)
@@ -68,68 +63,66 @@ def _materialise(cached: Path, dest: Path) -> None:
     with zipfile.ZipFile(cached) as archive:
         if FILENAME not in archive.namelist():
             logger.error(
-                "Archiwum %s nie zawiera %s. Zawartość: %s",
+                "Archive %s does not contain %s. Contents: %s",
                 cached,
                 FILENAME,
                 archive.namelist(),
             )
             raise SystemExit(1)
-        logger.info("Rozpakowuję %s z archiwum ...", FILENAME)
-        # Strumieniowo, nie `archive.read()`: rozpakowany plik ma ~158 MB
-        # i nie ma powodu trzymać go w całości w pamięci.
+        logger.info("Extracting %s from the archive ...", FILENAME)
+        # Streamed, not archive.read(): the unpacked file is ~158 MB.
         with archive.open(FILENAME) as source, dest.open("wb") as target:
             shutil.copyfileobj(source, target)
 
 
 def download() -> Path:
-    """Pobiera plik konkursowy do `data/raw/`, jeśli jeszcze go tam nie ma.
+    """Download the competition file to `data/raw/` if it is not there yet.
 
     Returns:
-        Ścieżka do pobranego pliku CSV.
+        Path to the downloaded CSV.
 
     Raises:
-        SystemExit: gdy Kaggle odrzuci żądanie (brak kluczy lub nieakceptowany
-            regulamin konkursu).
+        SystemExit: When Kaggle rejects the request, from missing keys or
+            unaccepted competition rules.
     """
-    # `zipfile.is_zipfile` zamiast samego `exists()`: wcześniejsza wersja tego
-    # skryptu zapisywała archiwum ZIP pod nazwą `.csv`, a `exists()` uznawało je
-    # za gotowe dane i pomijało pobieranie już na zawsze. Uszkodzony plik
-    # przeżywał każde kolejne uruchomienie.
+    # is_zipfile rather than exists() alone: an earlier version of this script
+    # saved a ZIP under a .csv name, and exists() then treated the corrupt file
+    # as ready data and skipped the download on every later run.
     if DEST.exists() and not zipfile.is_zipfile(DEST):
         size_mb = DEST.stat().st_size / 1024**2
         logger.info(
-            "Plik już istnieje: %s (%.1f MB) — pomijam pobieranie.", DEST, size_mb
+            "File already exists: %s (%.1f MB); skipping download.", DEST, size_mb
         )
         return DEST
 
     if DEST.exists():
-        logger.warning("%s to archiwum ZIP, nie CSV — rozpakowuję ponownie.", DEST)
+        logger.warning("%s is a ZIP archive, not a CSV; extracting again.", DEST)
 
     import kagglehub
 
-    logger.info("Pobieram %s z konkursu %s ...", FILENAME, COMPETITION)
+    logger.info("Downloading %s from competition %s ...", FILENAME, COMPETITION)
     try:
         cached = kagglehub.competition_download(COMPETITION, path=FILENAME)
     except Exception as exc:
-        logger.error("Pobieranie nie powiodło się: %s", exc)
+        logger.error("Download failed: %s", exc)
         logger.error(
-            "Sprawdź: (1) poświadczenia — KAGGLE_API_TOKEN albo para "
-            "KAGGLE_USERNAME+KAGGLE_KEY w .env, albo ~/.kaggle/kaggle.json "
-            "(szczegóły w .env.example), (2) czy regulamin konkursu został "
-            "zaakceptowany w przeglądarce — bez tego API zwraca 403 mimo "
-            "poprawnych kluczy."
+            "Check: (1) credentials - KAGGLE_API_TOKEN, or the pair "
+            "KAGGLE_USERNAME+KAGGLE_KEY, or ~/.kaggle/kaggle.json; "
+            "(2) whether the competition rules were accepted in a browser; "
+            "see .env.example. "
+            "without which the API returns 403 even with valid keys."
         )
         raise SystemExit(1) from exc
 
     DEST_DIR.mkdir(parents=True, exist_ok=True)
     _materialise(Path(cached), DEST)
     size_mb = DEST.stat().st_size / 1024**2
-    logger.info("Zapisano %s (%.1f MB).", DEST, size_mb)
+    logger.info("Saved %s (%.1f MB).", DEST, size_mb)
     return DEST
 
 
 def main() -> None:
-    """Punkt wejścia CLI."""
+    """CLI entry point."""
     path = download()
     print(f"OK: {path}")
 

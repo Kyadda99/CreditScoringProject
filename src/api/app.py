@@ -1,8 +1,6 @@
-"""Serwis scoringowy: /health i /score.
+"""Scoring service: /health and /score.
 
-Model ładowany jest **raz**, w `lifespan`, i trzymany na `app.state`. Ładowanie
-przy każdym żądaniu byłoby o rzędy wielkości wolniejsze i nie ma żadnego powodu,
-żeby to robić — pipeline jest niezmienny.
+The model is loaded once in `lifespan` and held on `app.state`.
 """
 
 from __future__ import annotations
@@ -25,13 +23,7 @@ from api.schemas import (
 from artifact import load_bundle
 from predictor import Predictor
 
-# uvicorn konfiguruje wyłącznie własne loggery ("uvicorn", "uvicorn.access")
-# i zostawia root bez handlera na poziomie WARNING — przez co każdy
-# `logger.info(...)` z tego modułu przepadał w ciszy. W kontenerze widać było
-# tylko logi uvicorna, więc kryterium Fazy 1 ("udowodnij, że model ładuje się
-# raz") było niesprawdzalne, a w Fazie 6 nic nie trafiłoby do Cloud Logging.
-# app.py jest punktem wejścia aplikacji, nie biblioteką, więc konfiguracja
-# logowania należy tutaj.
+# uvicorn configures only its own loggers; root stays unhandled at WARNING.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -42,57 +34,46 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Ładuje model i ustawienia raz, przy starcie procesu.
+    """Load the model and settings once at process start.
 
-    Brak artefaktu jest błędem krytycznym — wyjątek tutaj zatrzymuje start
-    kontenera. To celowe: serwis, który odpowiada na /health, a wywraca się na
-    każdym /score, jest gorszy niż serwis, który w ogóle nie wstał.
+    A missing artifact is fatal and stops the container from starting.
 
     Args:
-        app: Aplikacja, na której stanie lądują model i ustawienia.
+        app: Application whose state receives the model and settings.
 
     Yields:
-        Nic — sterowanie wraca do FastAPI na czas życia procesu.
+        Nothing; control returns to FastAPI for the life of the process.
     """
     settings = get_settings()
-    logger.info("Ładuję model: %s", settings.model_path)
+    logger.info("Loading model: %s", settings.model_path)
     bundle = load_bundle(settings.model_path)
 
-    # Fail closed. Porównujemy kontrakt WEJŚCIOWY (surowe kolumny), a nie grupy
-    # modelu: od Fazy 2 te dwa kontrakty celowo się różnią, bo model konsumuje
-    # cechy pochodne, których klient nie przysyła (spec D2).
-    # Kontrakt cech i artefakt wchodzą do obrazu z DWÓCH różnych
-    # źródeł: schemat przez koło z gita, artefakt przez `COPY models/…` z dysku
-    # hosta. Bez tej kontroli rozjazd nie daje żadnego błędu — pole obecne
-    # w schemacie, a nieznane modelowi, jest po cichu gubione, a cecha, której
-    # model potrzebuje, ale schemat jej nie zna, wraca jako 422, choć wewnątrz
-    # i tak byłaby imputowana. Serwis scorowałby dalej, tyle że źle.
+    # Fail closed. Compares the input contract (raw columns), not the model's
+    # feature groups: the two differ because the model consumes derived
+    # features the client never sends. Without this check a mismatch is silent.
     if bundle.input_groups != FEATURE_GROUPS:
         raise RuntimeError(
-            "Kontrakt wejściowy nie zgadza się z artefaktem modelu.\n"
-            f"  feature_schema.json: {len(FEATURE_GROUPS.all_features)} kolumn\n"
+            "Input contract does not match the model artifact.\n"
+            f"  feature_schema.json: {len(FEATURE_GROUPS.all_features)} columns\n"
             f"  {settings.model_path}: "
-            f"{len(bundle.input_groups.all_features)} kolumn\n"
-            "Przetrenuj model i zacommituj wygenerowany feature_schema.json: "
+            f"{len(bundle.input_groups.all_features)} columns\n"
+            "Retrain the model and commit the generated feature_schema.json: "
             "uv run cs-train"
         )
 
-    # Próg z artefaktu jest domyślny, a nie zaszyty w kodzie: metryki zapisane
-    # przy treningu opisują decyzję podjętą PRZY TYM progu. Gdy Faza 3 go
-    # dostroi, serwis pójdzie za artefaktem, zamiast cicho stosować inną regułę
-    # niż ta, którą zmierzono. `CS_SCORE_THRESHOLD` nadal ma pierwszeństwo.
+    # The artifact threshold is the default; CS_SCORE_THRESHOLD overrides it.
     predictor = Predictor.from_settings(settings, bundle)
     threshold = predictor.threshold
     source = (
-        "CS_SCORE_THRESHOLD" if settings.score_threshold is not None else "artefakt"
+        "CS_SCORE_THRESHOLD" if settings.score_threshold is not None else "artifact"
     )
 
     app.state.bundle = bundle
     app.state.predictor = predictor
     app.state.settings = settings
     logger.info(
-        "Model gotowy. ROC-AUC z treningu: %s, próg: %.2f (źródło: %s), "
-        "kolumn wejściowych: %d, cech modelu: %d, sklearn: %s",
+        "Model ready. Training ROC-AUC: %s, threshold: %.2f (source: %s), "
+        "input columns: %d, model features: %d, sklearn: %s",
         bundle.metadata.get("roc_auc"),
         threshold,
         source,
@@ -101,12 +82,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         bundle.metadata.get("sklearn_version"),
     )
     yield
-    logger.info("Zamykam serwis.")
+    logger.info("Shutting down.")
 
 
 app = FastAPI(
     title="Credit Scoring API",
-    description="Prawdopodobieństwo trudności ze spłatą kredytu.",
+    description="Probability of difficulty repaying a loan.",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -116,19 +97,18 @@ app = FastAPI(
 async def validation_error_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
-    """Zwraca 422 bez odsyłania surowego wejścia z powrotem.
+    """Return 422 without echoing the raw input back.
 
-    Domyślny handler FastAPI wkłada do treści błędu pole `input` z oryginalną
-    wartością. Dla `Infinity` enkoder JSON się na tym wywraca i klient dostaje
-    500 zamiast 422 — czyli wygląda to na awarię serwera, choć jest to błędne
-    żądanie. Odsyłanie wejścia z powrotem jest zresztą samo w sobie zbędne.
+    The default FastAPI handler puts the original value in an `input` field.
+    For `Infinity` the JSON encoder fails on it and the client gets a 500
+    instead of a 422.
 
     Args:
-        request: Żądanie, które nie przeszło walidacji.
-        exc: Wyjątek walidacji z listą błędów.
+        request: Request that failed validation.
+        exc: Validation exception carrying the list of errors.
 
     Returns:
-        Odpowiedź 422 z lokalizacją, komunikatem i typem każdego błędu.
+        A 422 response with the location, message and type of each error.
     """
     return JSONResponse(
         status_code=422,
@@ -143,46 +123,41 @@ async def validation_error_handler(
 
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
-    """Sonda zdrowia. Zwraca 200 wyłącznie, gdy start się powiódł.
+    """Health probe. Returns 200 only when startup succeeded.
 
     Returns:
-        Stały status `ok`.
+        A constant `ok` status.
     """
     return HealthResponse(status="ok")
 
 
-# Celowo `def`, nie `async def`. `predict_proba` to praca CPU-bound trwająca
-# ~24 ms; na pętli zdarzeń żądania ustawiałyby się w kolejce jedno za drugim
-# (~42 rps na workera). FastAPI uruchamia endpointy synchroniczne w puli
-# wątków, więc zwykłe `def` jest tu poprawną odpowiedzią — i tego wymaga
-# CLAUDE.md ("keep CPU-bound work off the event loop").
+# Sync def: predict_proba is CPU-bound (~24 ms), so FastAPI runs it in a threadpool.
 @app.post("/score", response_model=ScoreResponse)
 def score(payload: ScoreRequest, request: Request) -> ScoreResponse:  # type: ignore[valid-type]
-    """Ocenia jeden wniosek kredytowy.
+    """Score a single loan application.
 
     Args:
-        payload: Cechy wniosku; każde pole opcjonalne.
-        request: Żądanie — po to, żeby sięgnąć po `app.state`.
+        payload: Application features; every field is optional.
+        request: Request, used to reach `app.state`.
 
     Returns:
-        Prawdopodobieństwo, decyzja i próg, który ją wyprodukował.
+        The probability, the decision, and the threshold that produced it.
 
     Raises:
-        HTTPException: 500, gdy scoring się nie powiedzie.
+        HTTPException: 500 when scoring fails.
     """
     predictor = request.app.state.predictor
 
     try:
         result = predictor.score(payload.model_dump(exclude_none=True))
     except ValueError as exc:
-        # ValueError ze sklearn-a to niemal zawsze złe wejście, nie awaria
-        # serwera — 422, nie 500.
-        logger.warning("Odrzucone wejście: %s", exc)
+        # A sklearn ValueError is almost always bad input, not a server fault.
+        logger.warning("Rejected input: %s", exc)
         raise HTTPException(status_code=422, detail="Invalid feature values.") from None
     except Exception:
-        # Treść wyjątku nie trafia do odpowiedzi — mogłaby ujawnić nazwy kolumn
-        # i szczegóły modelu. Pełny ślad idzie do logów.
-        logger.exception("Scoring nie powiódł się.")
+        # Exception text is withheld from the response: it can leak column
+        # names and model details. The full trace goes to the logs.
+        logger.exception("Scoring failed.")
         raise HTTPException(status_code=500, detail="Scoring failed.") from None
 
     return ScoreResponse(
@@ -193,18 +168,13 @@ def score(payload: ScoreRequest, request: Request) -> ScoreResponse:  # type: ig
 
 
 def main() -> None:
-    """Uruchamia serwis lokalnie: `uv run cs-serve`.
-
-    Istnieje, bo bez tego jedyną wspieraną drogą uruchomienia był kontener,
-    a `CLAUDE.md` wymaga, żeby polecenia startowe szły przez
-    `[project.scripts]`.
-    """
+    """Run the service locally."""
     import os
 
     import uvicorn
 
     uvicorn.run(
         "api.app:app",
-        host="0.0.0.0",  # noqa: S104 — kontener musi nasłuchiwać poza localhostem
+        host="0.0.0.0",  # noqa: S104 - container must listen beyond localhost
         port=int(os.environ.get("PORT", "8080")),
     )

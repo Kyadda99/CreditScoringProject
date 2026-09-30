@@ -1,7 +1,7 @@
-"""Utrwalone zachowanie ścieżki treningowej.
+"""Pinned behaviour of the training path.
 
-Te testy nie opisują nowego wymagania — pilnują zachowania, które już istnieje,
-żeby przenoszenie kodu między modułami nie zmieniło go po cichu.
+These tests do not state a new requirement. They pin behaviour that already
+exists, so moving code between modules cannot change it silently.
 """
 
 from __future__ import annotations
@@ -24,14 +24,14 @@ from strategies import get_estimator_strategy, get_imbalance_strategy
 
 
 def synthetic_frame(rows: int = 60, seed: int = 0) -> tuple[pd.DataFrame, np.ndarray]:
-    """Buduje małą ramkę o kontrakcie produkcyjnym i etykiety 0/1.
+    """Build a small frame with the production contract, plus 0/1 labels.
 
     Args:
-        rows: Liczba wierszy.
-        seed: Ziarno generatora.
+        rows: Number of rows.
+        seed: Generator seed.
 
     Returns:
-        `(ramka surowych kolumn, etykiety)`.
+        `(frame of raw columns, labels)`.
     """
     inputs = load_feature_groups()
     rng = np.random.default_rng(seed)
@@ -128,7 +128,7 @@ def test_fitted_pipeline_probabilities_are_reproducible(
 
 
 def _groups(frame: pd.DataFrame) -> FeatureGroups:
-    """Zwraca grupy cech modelu dla ramki po inżynierii cech."""
+    """Return the model feature groups for a frame after engineering."""
     return split_feature_groups(
         FeatureEngineer().fit_transform(frame), dropped=DROPPED_COLUMNS
     )

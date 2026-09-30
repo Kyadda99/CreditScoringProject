@@ -1,7 +1,7 @@
-"""Testy funkcji analitycznych EDA.
+"""Tests for the EDA analysis functions.
 
-Wszystkie działają na ramkach syntetycznych — CI nie ma zbioru danych, a te
-funkcje muszą być zielone także tam.
+All run on synthetic frames: CI has no dataset and these functions must be
+green there too.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ def test_missingness_counts_and_shares(frame: pd.DataFrame) -> None:
 
 
 def test_missingness_sorted_worst_first(frame: pd.DataFrame) -> None:
-    """Kolejność jest częścią kontraktu — raport czyta się od góry."""
+    """Order is part of the contract; the report is read from the top."""
     report = missingness_report(frame)
     assert report["pct_missing"].is_monotonic_decreasing
 
@@ -53,7 +53,7 @@ def test_cardinality_counts_distinct_ignoring_nan(frame: pd.DataFrame) -> None:
 
 
 def test_cardinality_only_covers_non_numeric(frame: pd.DataFrame) -> None:
-    """Faza 4 wymiaruje `nn.Embedding` z tej tabeli — liczby jej nie dotyczą."""
+    """Only non-numeric columns have a cardinality to report."""
     report = cardinality_report(frame)
     assert set(report["column"]) == {"cat"}
 
@@ -81,6 +81,6 @@ def test_correlation_screen_finds_redundant_pairs() -> None:
 
 
 def test_correlation_screen_reports_each_pair_once() -> None:
-    """Górny trójkąt, nie cała macierz — inaczej każda para jest podwójnie."""
+    """Upper triangle, not the whole matrix, or every pair appears twice."""
     df = pd.DataFrame({"a": [1.0, 2.0, 3.0], "b": [2.0, 4.0, 6.0]})
     assert len(correlation_screen(df, threshold=0.5)) == 1

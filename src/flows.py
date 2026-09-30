@@ -1,7 +1,7 @@
-"""Przepływ treningowy: kolejność kroków, ponawianie i cache.
+"""Training flow: step order, retries and caching.
 
-Prefect odpowiada za wykonanie — kolejność, ponowienia, cache i harmonogram.
-MLflow odpowiada za zapis wyników. Żaden z nich nie zastępuje drugiego.
+Prefect owns execution: order, retries, caching and scheduling. MLflow owns
+recording the results. Neither replaces the other.
 """
 
 from __future__ import annotations
@@ -26,12 +26,12 @@ logger = logging.getLogger(__name__)
 
 
 def _features(settings: TrainingSettings) -> tuple[str, ...]:
-    """Zwraca listę cech pochodnych wynikającą z konfiguracji."""
+    """Return the derived features implied by the configuration."""
     return ENGINEERED_FEATURES if settings.engineered else ()
 
 
 def _trainer(settings: TrainingSettings, groups: FeatureGroups) -> ModelTrainer:
-    """Buduje trenera dla policzonych juz grup cech."""
+    """Build a trainer for already-computed feature groups."""
     return ModelTrainer.from_settings(
         settings, Preprocessor(groups, _features(settings))
     )
@@ -41,14 +41,14 @@ def _trainer(settings: TrainingSettings, groups: FeatureGroups) -> ModelTrainer:
 def contracts_task(
     X_train: pd.DataFrame, settings: TrainingSettings
 ) -> tuple[FeatureGroups, FeatureGroups]:
-    """Liczy oba kontrakty kolumn raz na przebieg.
+    """Compute both column contracts once per run.
 
     Args:
-        X_train: Surowa ramka treningowa.
-        settings: Konfiguracja treningu.
+        X_train: Raw training frame.
+        settings: Training configuration.
 
     Returns:
-        `(grupy modelu, kontrakt wejsciowy)`.
+        `(model groups, input contract)`.
     """
     loader = DataLoader.from_settings(settings)
     return (
@@ -59,13 +59,13 @@ def contracts_task(
 
 @task(retries=2, retry_delay_seconds=10)
 def load_task(settings: TrainingSettings) -> pd.DataFrame:
-    """Wczytuje dane; ponawia, bo odczyt bywa przejściowo zawodny.
+    """Load the data; retries because the read can fail transiently.
 
     Args:
-        settings: Konfiguracja treningu.
+        settings: Training configuration.
 
     Returns:
-        Pełna ramka danych.
+        The full data frame.
     """
     return DataLoader.from_settings(settings).load()
 
@@ -74,11 +74,11 @@ def load_task(settings: TrainingSettings) -> pd.DataFrame:
 def split_task(
     df: pd.DataFrame, settings: TrainingSettings
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
-    """Dzieli dane na treningowe i testowe.
+    """Split the data into training and test sets.
 
     Args:
-        df: Pełna ramka.
-        settings: Konfiguracja treningu.
+        df: Full frame.
+        settings: Training configuration.
 
     Returns:
         `(X_train, X_test, y_train, y_test)`.
@@ -86,8 +86,8 @@ def split_task(
     return DataLoader.from_settings(settings).split(df)
 
 
-# INPUTS + TASK_SOURCE, a nie samo INPUTS: klucz musi widziec kod zadania,
-# inaczej po zmianie hiperparametrow siatka wraca z poprzedniego przebiegu.
+# INPUTS + TASK_SOURCE, not INPUTS alone: the key must see the task code,
+# or the grid returns the previous run's result after a hyperparameter change.
 @task(cache_policy=INPUTS + TASK_SOURCE, cache_expiration=timedelta(days=7))
 def grid_task(
     X_train: pd.DataFrame,
@@ -97,21 +97,21 @@ def grid_task(
     groups: FeatureGroups,
     settings: TrainingSettings,
 ) -> dict[tuple[str, str], dict[str, float]]:
-    """Trenuje siatkę; wynik jest cache'owany po wartościach wejściowych.
+    """Train the grid; the result is cached on the input values.
 
-    Cache liczony z danych, a nie ze ścieżki pliku: po zmianie zbioru krok
-    musi policzyć się od nowa, inaczej trening przeszedłby na starych danych.
+    The cache key comes from the data, not the file path: after the dataset
+    changes the step must recompute, or training would run on stale data.
 
     Args:
-        X_train: Cechy treningowe.
-        y_train: Etykiety treningowe.
-        X_test: Cechy testowe.
-        y_test: Etykiety testowe.
-        groups: Grupy cech modelu.
-        settings: Konfiguracja treningu.
+        X_train: Training features.
+        y_train: Training labels.
+        X_test: Test features.
+        y_test: Test labels.
+        groups: Model feature groups.
+        settings: Training configuration.
 
     Returns:
-        Metryki każdej komórki siatki.
+        Metrics for every grid cell.
     """
     return _trainer(settings, groups).run_grid(X_train, y_train, X_test, y_test)
 
@@ -126,19 +126,19 @@ def champion_task(
     groups: FeatureGroups,
     settings: TrainingSettings,
 ) -> tuple[Pipeline, float, dict[str, float], str, str]:
-    """Wybiera championa, dopasowuje go i wyznacza jego próg.
+    """Select the champion, fit it, and choose its threshold.
 
     Args:
-        X_train: Cechy treningowe.
-        y_train: Etykiety treningowe.
-        X_test: Cechy testowe.
-        y_test: Etykiety testowe.
-        results: Metryki siatki.
-        groups: Grupy cech modelu.
-        settings: Konfiguracja treningu.
+        X_train: Training features.
+        y_train: Training labels.
+        X_test: Test features.
+        y_test: Test labels.
+        results: Grid metrics.
+        groups: Model feature groups.
+        settings: Training configuration.
 
     Returns:
-        `(pipeline, próg, metryki, nazwa modelu, ramię)`.
+        `(pipeline, threshold, metrics, model name, arm)`.
     """
     trainer = _trainer(settings, groups)
     model_name, arm = trainer.select_champion(results)
@@ -163,22 +163,22 @@ def promote_task(
     rows_train: int,
     rows_test: int,
 ) -> bool:
-    """Przepuszcza championa przez bramki jakości i promuje go, gdy przejdzie.
+    """Run the champion through the quality gates and promote it if it passes.
 
     Args:
-        pipeline: Dopasowany potok championa.
-        threshold: Próg decyzyjny.
-        metrics: Metryki na zbiorze testowym.
-        model_name: Nazwa algorytmu.
-        arm: Ramię niezbalansowania.
-        groups: Grupy cech modelu.
-        inputs: Kontrakt wejściowy.
-        settings: Konfiguracja treningu.
-        rows_train: Liczba wierszy treningowych.
-        rows_test: Liczba wierszy testowych.
+        pipeline: Fitted champion pipeline.
+        threshold: Decision threshold.
+        metrics: Metrics on the test set.
+        model_name: Algorithm name.
+        arm: Imbalance arm.
+        groups: Model feature groups.
+        inputs: Input contract.
+        settings: Training configuration.
+        rows_train: Number of training rows.
+        rows_test: Number of test rows.
 
     Returns:
-        `True`, gdy model został promowany.
+        `True` when the model was promoted.
     """
     return promote_champion(
         pipeline=pipeline,
@@ -200,15 +200,15 @@ def training_pipeline(
     register_champion: bool = True,
     settings: TrainingSettings | None = None,
 ) -> dict[tuple[str, str], dict[str, float]]:
-    """Uruchamia pełną ścieżkę treningu.
+    """Run the full training path.
 
     Args:
-        register_champion: `False` kończy po tabeli porównawczej i nie dotyka
-            rejestru.
-        settings: Konfiguracja; `None` bierze ustawienia procesu.
+        register_champion: `False` stops after the comparison table and does
+            not touch the registry.
+        settings: Configuration; `None` uses the process settings.
 
     Returns:
-        Metryki wszystkich komórek siatki.
+        Metrics for every grid cell.
     """
     settings = settings or get_training_settings()
 
@@ -222,7 +222,7 @@ def training_pipeline(
     results = grid_task(X_train, y_train, X_test, y_test, groups, settings)
 
     logger.info(
-        "Tabela porownawcza:\n%s",
+        "Comparison table:\n%s",
         _trainer(settings, groups).comparison_table(results).to_string(index=False),
     )
 

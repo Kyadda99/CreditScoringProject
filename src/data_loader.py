@@ -1,8 +1,7 @@
-"""Wejście danych: wczytanie, podział i oba kontrakty kolumn.
+"""Data entry: loading, splitting and both column contracts.
 
-Grupy cech wyprowadzamy wyłącznie ze zbioru treningowego. Policzone na pełnej
-ramce pozwoliłyby zbiorowi testowemu wpłynąć na to, która kolumna uchodzi za
-flagę binarną.
+Feature groups are derived from the training set only. Computed on the full
+frame, the test set could influence which column counts as a binary flag.
 """
 
 from __future__ import annotations
@@ -31,12 +30,12 @@ TEST_SIZE = 0.2
 
 
 class DataLoader:
-    """Dostarcza dane treningowe i kontrakty kolumn.
+    """Supplies the training data and the column contracts.
 
     Attributes:
-        path: Ścieżka do pliku z danymi.
-        test_size: Udział zbioru testowego.
-        random_state: Ziarno podziału.
+        path: Path to the data file.
+        test_size: Test set fraction.
+        random_state: Split seed.
     """
 
     def __init__(
@@ -45,12 +44,12 @@ class DataLoader:
         test_size: float = TEST_SIZE,
         random_state: int = RANDOM_STATE,
     ) -> None:
-        """Zapamiętuje konfigurację wczytywania.
+        """Store the loading configuration.
 
         Args:
-            path: Ścieżka do pliku CSV.
-            test_size: Udział zbioru testowego.
-            random_state: Ziarno podziału.
+            path: Path to the CSV file.
+            test_size: Test set fraction.
+            random_state: Split seed.
         """
         self.path = path
         self.test_size = test_size
@@ -58,13 +57,13 @@ class DataLoader:
 
     @classmethod
     def from_settings(cls, settings: TrainingSettings) -> DataLoader:
-        """Buduje loader z konfiguracji.
+        """Build a loader from the configuration.
 
         Args:
-            settings: Ustawienia treningu.
+            settings: Training settings.
 
         Returns:
-            Loader wskazujący na skonfigurowany zbiór i podział.
+            A loader pointing at the configured dataset and split.
         """
         return cls(
             path=settings.data_path,
@@ -72,23 +71,23 @@ class DataLoader:
         )
 
     def load(self) -> pd.DataFrame:
-        """Wczytuje i czyści dane.
+        """Load and clean the data.
 
         Returns:
-            Ramka z kolumną celu i identyfikatorem.
+            A frame including the target and id columns.
         """
         return load_data(self.path)
 
     def split(
         self, df: pd.DataFrame
     ) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
-        """Dzieli ramkę na train/test ze stratyfikacją.
+        """Split the frame into train and test, stratified.
 
         Args:
-            df: Pełna ramka z celem i identyfikatorem.
+            df: Full frame with the target and id columns.
 
         Returns:
-            `(X_train, X_test, y_train, y_test)` bez celu i identyfikatora.
+            `(X_train, X_test, y_train, y_test)` without target or id.
         """
         y = df[TARGET]
         X = df.drop(columns=[TARGET, ID_COLUMN])
@@ -105,14 +104,14 @@ class DataLoader:
         X_train: pd.DataFrame,
         features: tuple[str, ...] = ENGINEERED_FEATURES,
     ) -> FeatureGroups:
-        """Zwraca grupy cech modelu, liczone po inżynierii cech.
+        """Return the model feature groups, computed after engineering.
 
         Args:
-            X_train: Surowa ramka treningowa.
-            features: Cechy pochodne.
+            X_train: Raw training frame.
+            features: Derived features.
 
         Returns:
-            Grupy cech sterujące `ColumnTransformer`.
+            The feature groups that drive the `ColumnTransformer`.
         """
         engineered = FeatureEngineer(features=features).fit_transform(X_train)
         return split_feature_groups(engineered, dropped=DROPPED_COLUMNS)
@@ -122,18 +121,18 @@ class DataLoader:
         X_train: pd.DataFrame,
         dropped: tuple[str, ...] = DROPPED_COLUMNS,
     ) -> FeatureGroups:
-        """Zwraca kontrakt wejściowy `/score` — same surowe kolumny.
+        """Return the `/score` input contract: raw columns only.
 
-        Kolumna jest przyjmowana, jeśli zostaje cechą modelu **albo** karmi
-        cechę pochodną. Bez drugiego warunku iloraz z usuniętej kolumny zawsze
-        wychodziłby NaN.
+        A column is accepted if it becomes a model feature or feeds a derived
+        one. Without the second condition a ratio using a dropped column would
+        always be NaN.
 
         Args:
-            X_train: Surowa ramka treningowa.
-            dropped: Kolumny usunięte decyzją z analizy danych.
+            X_train: Raw training frame.
+            dropped: Columns removed by the data analysis decisions.
 
         Returns:
-            Grupy surowych kolumn.
+            Groups of raw columns.
         """
         kept = set(X_train.columns) - set(dropped) | set(FEATURE_SOURCE_COLUMNS)
         accepted = [c for c in X_train.columns if c in kept]

@@ -1,15 +1,14 @@
-"""Dekodowanie wartości sentinelowych.
+"""Sentinel value decoding.
 
-`DAYS_EMPLOYED == 365243` to ~1000 lat stażu — tak zbiór koduje
-"niezatrudniony". Zostawiona liczba wchodzi do `StandardScaler` jako wartość
-oddalona o setki odchyleń i zdominowałaby wkład tej cechy w model liniowy.
+`DAYS_EMPLOYED == 365243` is ~1000 years of service: how the dataset encodes
+"not employed". Left as a number it enters `StandardScaler` hundreds of
+deviations out and would dominate the feature in a linear model.
 
-Dekodowanie mieszka **w pipelinie**, nie w `data.py` (spec D4): klient `/score`
-może przysłać 365243, a czyszczenie wykonywane tylko przy wczytywaniu danych
-nie obroniłoby produkcji.
+Decoding lives in the pipeline, not in `data.py`, because a `/score` client can
+send 365243 and cleaning done only at load time would not cover production.
 
-Wszystkie funkcje są czyste — biorą ramkę, zwracają nową serię, nie ruszają
-wejścia.
+All functions are pure: they take a frame, return a new series, and leave the
+input untouched.
 """
 
 from __future__ import annotations
@@ -23,17 +22,17 @@ _DAYS_EMPLOYED = "DAYS_EMPLOYED"
 
 
 def _numeric_column(frame: pd.DataFrame, name: str) -> pd.Series:
-    """Zwraca kolumnę jako float albo serię NaN, gdy kolumny nie ma.
+    """Return the column as float, or a NaN series when it is absent.
 
-    Brak kolumny nie jest błędem: pola `/score` są opcjonalne (Faza 1, D1),
-    a dopasowany imputer jest zaprojektowanym miejscem obsługi braków.
+    A missing column is not an error: `/score` fields are optional and the
+    fitted imputer is where missing values are handled.
 
     Args:
-        frame: Ramka wejściowa.
-        name: Nazwa kolumny.
+        frame: Input frame.
+        name: Column name.
 
     Returns:
-        Seria `float64` o indeksie ramki.
+        A `float64` series on the frame's index.
     """
     if name not in frame.columns:
         return pd.Series(np.nan, index=frame.index, dtype="float64")
@@ -41,30 +40,30 @@ def _numeric_column(frame: pd.DataFrame, name: str) -> pd.Series:
 
 
 def days_employed_cleaned(frame: pd.DataFrame) -> pd.Series:
-    """`DAYS_EMPLOYED` z wartością sentinelową zamienioną na NaN.
+    """`DAYS_EMPLOYED` with the sentinel value replaced by NaN.
 
     Args:
-        frame: Ramka mogąca zawierać `DAYS_EMPLOYED`.
+        frame: Frame that may contain `DAYS_EMPLOYED`.
 
     Returns:
-        Seria `float64`; sentinel → NaN, reszta bez zmian.
+        A `float64` series; sentinel becomes NaN, the rest is unchanged.
     """
     series = _numeric_column(frame, _DAYS_EMPLOYED)
     return series.mask(series == DAYS_EMPLOYED_SENTINEL)
 
 
 def not_employed_flag(frame: pd.DataFrame) -> pd.Series:
-    """Jawna flaga 0/1: czy wiersz miał wartość sentinelową.
+    """Explicit 0/1 flag: whether the row held the sentinel value.
 
-    Informacja "niezatrudniony" jest realna — udział defaultów w tej grupie to
-    5.40% wobec 8.66% w pozostałych. Bez tej flagi znika razem z sentinelem.
+    The "not employed" signal is real: 5.40% default rate in that group against
+    8.66% elsewhere. Without this flag it disappears with the sentinel.
 
     Args:
-        frame: Ramka mogąca zawierać `DAYS_EMPLOYED`.
+        frame: Frame that may contain `DAYS_EMPLOYED`.
 
     Returns:
-        Seria `float64` o wartościach 0.0/1.0. NaN daje 0.0 — brak wartości
-        nie jest dowodem na brak zatrudnienia.
+        A `float64` series of 0.0/1.0. NaN yields 0.0: an absent value is not
+        evidence of unemployment.
     """
     series = _numeric_column(frame, _DAYS_EMPLOYED)
     return (series == DAYS_EMPLOYED_SENTINEL).astype("float64")

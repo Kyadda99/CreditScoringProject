@@ -1,8 +1,8 @@
-"""Składanie potoku przetwarzania danych.
+"""Data processing pipeline assembly.
 
-`FeatureEngineer` jest pierwszym krokiem, więc derywacja cech jedzie razem
-z artefaktem, a `/score` przyjmuje surowe kolumny. Sampler, gdy jest, stoi za
-preprocessorem: SMOTE potrzebuje macierzy numerycznej.
+`FeatureEngineer` is the first step, so feature derivation travels with the
+artifact and `/score` accepts raw columns. A sampler, when present, sits after
+the preprocessor because SMOTE needs a numeric matrix.
 """
 
 from __future__ import annotations
@@ -20,11 +20,11 @@ from strategies import get_estimator_strategy
 
 
 class Preprocessor:
-    """Buduje potok przekształceń dla ustalonych grup cech.
+    """Builds the transformation pipeline for fixed feature groups.
 
     Attributes:
-        groups: Grupy cech wyprowadzone na ramce treningowej po inżynierii.
-        features: Nazwy cech pochodnych do policzenia.
+        groups: Feature groups derived on the training frame after engineering.
+        features: Names of the derived features to compute.
     """
 
     def __init__(
@@ -32,28 +32,28 @@ class Preprocessor:
         groups: FeatureGroups,
         features: tuple[str, ...] = ENGINEERED_FEATURES,
     ) -> None:
-        """Zapamiętuje kontrakt kolumn; niczego nie dopasowuje.
+        """Store the column contract; fit nothing.
 
         Args:
-            groups: Grupy cech modelu.
-            features: Cechy pochodne; pusta krotka wyłącza derywację.
+            groups: Model feature groups.
+            features: Derived features; an empty tuple disables derivation.
         """
         self.groups = groups
         self.features = features
 
     def engineer(self, frame: pd.DataFrame) -> pd.DataFrame:
-        """Zwraca ramkę z doliczonymi cechami pochodnymi.
+        """Return the frame with derived features added.
 
         Args:
-            frame: Surowe kolumny.
+            frame: Raw columns.
 
         Returns:
-            Nowa ramka; wejście pozostaje nietknięte.
+            A new frame; the input is left untouched.
         """
         return FeatureEngineer(features=self.features).fit_transform(frame)
 
     def build_transformer(self) -> ColumnTransformer:
-        """Zwraca niedopasowany `ColumnTransformer` dla grup cech."""
+        """Return an unfitted `ColumnTransformer` for the feature groups."""
         return build_preprocessor(self.groups)
 
     def build_pipeline(
@@ -61,14 +61,14 @@ class Preprocessor:
         estimator: BaseEstimator | None = None,
         sampler: BaseEstimator | None = None,
     ) -> Pipeline:
-        """Składa pełny potok: cechy, preprocessing, opcjonalny sampler, model.
+        """Assemble the full pipeline: features, preprocessing, sampler, model.
 
         Args:
-            estimator: Estymator do wpięcia; `None` daje regresję logistyczną.
-            sampler: Sampler `imblearn` albo `None`.
+            estimator: Estimator to plug in; `None` gives logistic regression.
+            sampler: An `imblearn` sampler, or `None`.
 
         Returns:
-            Niedopasowany potok — `sklearn` bez samplera, `imblearn` z samplerem.
+            An unfitted pipeline: `sklearn` without a sampler, `imblearn` with.
         """
         if estimator is None:
             estimator = get_estimator_strategy("logistic_regression").build(

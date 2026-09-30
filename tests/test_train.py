@@ -1,4 +1,4 @@
-"""Testy orkiestracji treningu — logika, nie pełny przebieg na 158 MB."""
+"""Training orchestration tests: logic, not a full run on 158 MB."""
 
 from __future__ import annotations
 
@@ -61,13 +61,13 @@ def test_split_is_eighty_twenty(frame: pd.DataFrame) -> None:
 
 
 def test_split_is_stratified(frame: pd.DataFrame) -> None:
-    """Przy 8% klasy pozytywnej niestratyfikowany podział potrafi ją zgubić."""
+    """At 8% positives an unstratified split can lose the class entirely."""
     _X_train, _X_test, y_train, y_test = DataLoader().split(frame)
     assert abs(float(y_train.mean()) - float(y_test.mean())) < 0.05
 
 
 def test_split_is_reproducible(frame: pd.DataFrame) -> None:
-    """Cały projekt stoi na tym, że RANDOM_STATE daje ten sam podział."""
+    """The whole project rests on RANDOM_STATE giving the same split."""
     first = DataLoader().split(frame)[1].index.tolist()
     second = DataLoader().split(frame)[1].index.tolist()
     assert first == second
@@ -97,11 +97,11 @@ def test_write_feature_schema_round_trips(tmp_path: Path) -> None:
     assert FeatureGroups.from_dict(payload) == groups
 
 
-# --- Faza 2: kontrakt wejściowy i inżynieria cech (spec D1, D2, D7) --------
+# --- Input contract and feature engineering ---
 
 
 def test_input_contract_is_raw_columns_only() -> None:
-    """Kontrakt wejściowy nie może zawierać cech pochodnych (spec D2)."""
+    """The input contract must not contain derived features."""
     frame = pd.DataFrame(
         {
             "AMT_CREDIT": [1.0, 2.0],
@@ -114,7 +114,7 @@ def test_input_contract_is_raw_columns_only() -> None:
 
 
 def test_input_contract_keeps_a_dropped_column_that_feeds_a_feature() -> None:
-    """Reguła przynależności z D2 — bez tego iloraz zawsze wychodzi NaN."""
+    """The membership rule: without it the ratio is always NaN."""
     from config import FEATURE_SOURCE_COLUMNS
 
     frame = pd.DataFrame({name: [1.0, 2.0] for name in FEATURE_SOURCE_COLUMNS})
@@ -138,7 +138,7 @@ def test_build_pipeline_puts_the_engineer_first() -> None:
 
 
 def test_build_pipeline_can_disable_engineered_features() -> None:
-    """Transza 1 ze spec D7."""
+    """Cleaning on, ratios off."""
     from config import FeatureGroups
 
     groups = FeatureGroups(numeric=("AMT_CREDIT",), categorical=(), binary=())
@@ -146,18 +146,18 @@ def test_build_pipeline_can_disable_engineered_features() -> None:
     assert pipeline.named_steps["features"].features == ()
 
 
-# --- Faza 3: estymator i sampler w pipelinie (spec D3) ---------------------
+# --- Estimator and sampler in the pipeline ---
 
 
 def test_build_pipeline_defaults_to_the_baseline_estimator(
     groups: FeatureGroups,
 ) -> None:
-    """Bez jawnego estymatora dostajemy regresję logistyczną — jak w Fazie 2.
+    """Without an explicit estimator the default is logistic regression.
 
-    Domyślna wartość istnieje celowo: `Preprocessor(groups).build_pipeline()` ma pięć
-    istniejących wywołań, w tym fixture `synthetic_artifact` w conftest.py.
-    Uczynienie estymatora obowiązkowym wyłączyłoby cały zestaw testów HTTP
-    w CI, a suite nadal raportowałby zieleń — to regresja M1 z Fazy 1.
+    The default exists deliberately: `Preprocessor(groups).build_pipeline()` has
+    five existing call sites, including the `synthetic_artifact` fixture. Making
+    the estimator mandatory would disable the whole HTTP set in CI while the suite
+    still reported green.
     """
     from sklearn.linear_model import LogisticRegression
 
@@ -200,13 +200,12 @@ def test_sampler_produces_an_imblearn_pipeline_with_the_sampler_in_place(
 def test_sampler_is_inert_outside_fit(
     frame: pd.DataFrame, groups: FeatureGroups
 ) -> None:
-    """Gwarancja braku wycieku (spec D3): sampler nie działa przy predict.
+    """No-leak guarantee: the sampler does nothing at predict.
 
-    Gdyby działał, predict na n wierszach zwracałby inną liczbę wyników niż n
-    — a w walidacji krzyżowej oznaczałoby to ocenianie modelu na syntetycznych
-    wierszach, których nigdy nie było w danych. Context7 nie ma dokumentacji
-    imbalanced-learn na ten temat, więc własność jest tu SPRAWDZANA, a nie
-    przyjmowana na wiarę.
+    If it did, predict on n rows would return a different number of results than
+    n, and under cross-validation that would mean scoring the model on synthetic
+    rows that were never in the data. The property is checked here rather than
+    taken on trust.
     """
     X_train, X_test, y_train, _y_test = DataLoader().split(frame)
     pipeline = (
@@ -227,17 +226,16 @@ def test_sampler_is_inert_outside_fit(
 def test_sampler_actually_rebalances_during_fit(
     frame: pd.DataFrame, groups: FeatureGroups
 ) -> None:
-    """Kontrola pozytywna do testu wyżej: sampler MUSI coś robić w `fit`.
+    """Positive control for the test above: the sampler must act during `fit`.
 
-    Bez tego "bezczynny przy predict" byłby spełniony także przez sampler,
-    który nie robi nic nigdzie — a wtedy całe ramię `resample` byłoby cichą
-    kopią ramienia `none`.
+    Without this, "inert at predict" would also be satisfied by a sampler that
+    does nothing anywhere, making the `resample` arm a silent copy of `none`.
     """
     from imblearn.over_sampling import SMOTE
 
-    # Fixture `frame` ma cel ~50/50, na którym SMOTE nie ma czego wyrównywać.
-    # Ten test potrzebuje realnego niezbalansowania, więc narzuca własne
-    # etykiety — 10% pozytywów, blisko produkcyjnych 8.07%.
+    # The `frame` fixture has a ~50/50 target, which gives SMOTE nothing to
+    # balance. This test needs real imbalance, so it sets its own labels:
+    # 10% positives, close to the production 8.07%.
     imbalanced = frame.copy()
     imbalanced[TARGET] = ([0] * 180) + ([1] * 20)
 
@@ -251,12 +249,12 @@ def test_sampler_actually_rebalances_during_fit(
     matrix = prep.fit_transform(engineered.fit_transform(X_train), y_train)
 
     _resampled_X, resampled_y = SMOTE(random_state=42).fit_resample(matrix, y_train)
-    assert len(resampled_y) > len(y_train), "SMOTE nie dołożył ani jednego wiersza"
-    # Po wyrównaniu obie klasy mają tyle samo wierszy.
+    assert len(resampled_y) > len(y_train), "SMOTE added no rows"
+    # After balancing both classes have the same number of rows.
     assert int(resampled_y.sum()) == int((resampled_y == 0).sum())
 
 
-# --- Faza 3: siatka eksperymentu (spec D2) --------------------------------
+# --- Experiment grid ---
 
 
 def test_run_grid_returns_one_metrics_dict_per_cell(
@@ -280,7 +278,7 @@ def test_run_grid_returns_one_metrics_dict_per_cell(
 def test_run_grid_covers_the_full_product_of_models_and_arms(
     frame: pd.DataFrame, groups: FeatureGroups
 ) -> None:
-    """Siatka to iloczyn kartezjański — brak komórki psuje porównanie."""
+    """The grid is a cartesian product; a missing cell breaks the comparison."""
     X_train, X_test, y_train, y_test = DataLoader().split(frame)
     results = ModelTrainer(
         Preprocessor(groups, features=()),
@@ -292,7 +290,7 @@ def test_run_grid_covers_the_full_product_of_models_and_arms(
 
 
 def test_comparison_table_is_sorted_by_pr_auc() -> None:
-    """Champion wybieramy po PR-AUC (spec D1), więc tabela ma to odzwierciedlać."""
+    """The champion is chosen by PR-AUC, so the table must reflect that."""
 
     def row(pr_auc: float, roc_auc: float) -> dict[str, float]:
         return {
@@ -322,7 +320,7 @@ def test_comparison_table_is_sorted_by_pr_auc() -> None:
     ]
 
 
-# --- Faza 3: wybór championa i jego próg (spec D1, D4) --------------------
+# --- Champion selection and its threshold ---
 
 
 def test_select_champion_picks_the_highest_pr_auc() -> None:
@@ -335,7 +333,7 @@ def test_select_champion_picks_the_highest_pr_auc() -> None:
 
 
 def test_select_champion_ignores_roc_auc() -> None:
-    """Gdyby wybór szedł po ROC-AUC, wygrałoby "b" — a nie wygrywa (spec D1)."""
+    """On ROC-AUC "b" would win; it must not."""
     results = {
         ("a", "none"): {"pr_auc": 0.30, "roc_auc": 0.70},
         ("b", "none"): {"pr_auc": 0.20, "roc_auc": 0.99},
@@ -346,7 +344,7 @@ def test_select_champion_ignores_roc_auc() -> None:
 def test_fit_champion_threshold_is_not_the_default_half(
     frame: pd.DataFrame, groups: FeatureGroups
 ) -> None:
-    """Próg pochodzi z przemiatania kosztowego na OOF, a nie z rozpędu."""
+    """The threshold comes from a cost sweep on OOF predictions, not from habit."""
     X_train, X_test, y_train, y_test = DataLoader().split(frame)
     _pipeline, threshold, metrics = ModelTrainer(
         Preprocessor(groups, features=()), cv_splits=3
@@ -368,7 +366,7 @@ def test_fit_champion_returns_a_fitted_usable_pipeline(
 def test_fit_champion_cost_threshold_raises_recall_over_the_default(
     frame: pd.DataFrame, groups: FeatureGroups
 ) -> None:
-    """Sedno fazy: przy koszcie FN 10x FP próg spada, a recall rośnie."""
+    """At FN costing 10x FP the threshold falls and recall rises."""
     from evaluation import evaluate
 
     X_train, X_test, y_train, y_test = DataLoader().split(frame)

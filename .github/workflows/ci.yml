@@ -9,8 +9,8 @@ on:
 permissions:
   contents: read
 
-# Nowy push na tę samą gałąź anuluje poprzedni bieg. Na `main` NIE anulujemy —
-# tam każdy commit musi mieć własny, rozstrzygnięty wynik.
+# A new push to the same branch cancels the previous run. Not on `main`,
+# where every commit must have its own settled result.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -19,10 +19,10 @@ jobs:
   lint-and-test:
     runs-on: ubuntu-latest
     env:
-      # Egzekwuje, że `uv.lock` jest aktualny wobec `pyproject.toml`: każde
-      # wywołanie uv (także niejawny sync w `uv run`) przerywa, jeśli lock
-      # miałby się zmienić. `--frozen` tego NIE robi — ono tylko nie aktualizuje
-      # locka, więc rozjazd pyproject/lock przeszedłby niezauważony.
+      # Enforces that uv.lock is current with pyproject.toml: any uv call,
+      # including the implicit sync in `uv run`, fails if the lock would
+      # change. `--frozen` does not do this; it only skips updating the lock,
+      # so a pyproject/lock drift would pass unnoticed.
       UV_LOCKED: "1"
     steps:
       - uses: actions/checkout@v4
@@ -45,8 +45,8 @@ jobs:
       - name: Black
         run: uv run black --check .
 
-      # Zbiór Home Credit wymaga poświadczeń Kaggle i waży ~160 MB, więc CI go
-      # nie pobiera. Testy oznaczone `requires_data` pominą się same
-      # (tests/conftest.py); reszta musi przejść.
+      # The Home Credit dataset needs Kaggle credentials and weighs ~160 MB,
+      # so CI does not download it. Tests marked `requires_data` skip
+      # themselves; the rest must pass.
       - name: Pytest
         run: uv run pytest

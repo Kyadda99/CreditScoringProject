@@ -1,4 +1,4 @@
-"""Kontrakt ModelTrainera: siatka, champion i próg."""
+"""ModelTrainer contract: grid, champion and threshold."""
 
 from __future__ import annotations
 
@@ -96,7 +96,7 @@ def test_fit_champion_threshold_comes_from_out_of_fold_predictions(
 
 
 def test_grid_lists_are_derived_from_the_strategy_registries() -> None:
-    """Jedno źródło prawdy: nowa strategia ma wchodzić do siatki sama."""
+    """One source of truth: a new strategy must enter the grid by itself."""
     from strategies import ESTIMATOR_STRATEGIES, IMBALANCE_STRATEGIES
     from trainer import ALL_ARMS, ALL_MODELS
 
@@ -118,7 +118,7 @@ def test_from_settings_maps_every_field() -> None:
 
 
 def test_run_params_take_the_weight_from_the_strategy_not_a_string() -> None:
-    """Ramię ważone ma trafić do zapisu biegu z tej samej decyzji co model."""
+    """A weighted arm must reach the run record from the same decision as the model."""
     frame, _ = synthetic_frame(rows=20)
     trainer = ModelTrainer(Preprocessor(split_feature_groups(frame)))
 

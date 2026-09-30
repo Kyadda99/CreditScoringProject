@@ -1,4 +1,4 @@
-"""Fabryki from_settings i zachowanie przy braku opcjonalnej konfiguracji."""
+"""from_settings factories and behaviour without optional configuration."""
 
 from __future__ import annotations
 
@@ -32,10 +32,10 @@ def test_training_settings_read_the_environment(
 
 
 def test_seed_is_not_configurable_so_it_cannot_half_apply() -> None:
-    """Ziarno jest jedno i projektowe.
+    """The seed is single and project-wide.
 
-    Konfigurowalne tylko dla podziału kłamałoby w metadanych: estymatory,
-    sampler i walidacja krzyżowa i tak biorą je z `config`.
+    Making it configurable for the split alone would lie in the metadata: the
+    estimators, the sampler and cross-validation all take it from `config`.
     """
     assert not hasattr(TrainingSettings(), "random_state")
     assert DataLoader().random_state == RANDOM_STATE

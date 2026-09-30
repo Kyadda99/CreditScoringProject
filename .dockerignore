@@ -1,5 +1,5 @@
-# Kontekst budowania musi być mały. Bez tego pliku trafiłby tu 158 MB CSV
-# i całe .venv, co spowalnia każdy build i puchnie warstwy.
+# The build context must stay small. Without this file the 158 MB CSV and the
+# whole .venv would be sent, slowing every build and inflating the layers.
 .git/
 .venv/
 data/
@@ -14,4 +14,4 @@ __pycache__/
 .env
 tests/
 
-# UWAGA: models/ NIE jest tu wykluczone — artefakt musi wejść do obrazu.
+# models/ is deliberately not excluded: the artifact must enter the image.

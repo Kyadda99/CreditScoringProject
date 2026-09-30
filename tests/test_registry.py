@@ -1,8 +1,7 @@
-"""Testy opakowania rejestru modeli MLflow.
+"""Tests for the MLflow model registry wrapper.
 
-Wszystko jedzie na tymczasowym SQLite w `tmp_path` — rejestr wymaga backendu
-bazodanowego (plikowy `./mlruns` go nie obsłuży), ale **nie** wymaga zbioru
-danych, więc te testy działają także w CI.
+Everything runs on a temporary SQLite database in `tmp_path`. The registry
+needs a database backend, but not the dataset, so these tests run in CI.
 """
 
 from __future__ import annotations
@@ -32,7 +31,7 @@ _Y = np.array([0, 0, 1, 1])
 
 @pytest.fixture()
 def tracking(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
-    """Izolowany backend MLflow na czas jednego testu."""
+    """An MLflow backend isolated to a single test."""
     uri = f"sqlite:///{(tmp_path / 'test.db').as_posix()}"
     monkeypatch.setattr(registry_module, "MLFLOW_TRACKING_URI", uri)
     mlflow.set_tracking_uri(uri)
@@ -41,7 +40,7 @@ def tracking(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
 
 
 def _logged_run() -> str:
-    """Loguje trywialny model sklearn i zwraca run_id."""
+    """Log a trivial sklearn model and return its run_id."""
     model = LogisticRegression().fit(_X, _Y)
     with mlflow.start_run() as run:
         mlflow.sklearn.log_model(model, name="model")
@@ -49,7 +48,7 @@ def _logged_run() -> str:
 
 
 def _logged_run_with_bundle(tmp_path: Path) -> str:
-    """Bieg zawierający i model sklearn, i artefakt Bundle — jak w train.py."""
+    """A run holding both the sklearn model and the Bundle artifact."""
     from artifact import save_bundle
     from config import FeatureGroups
 
@@ -72,14 +71,14 @@ def test_register_creates_a_version(tracking: str) -> None:
 
 
 def test_promote_then_load_returns_a_usable_model(tracking: str) -> None:
-    """Pełny obieg: zarejestruj, ustaw alias, wczytaj po aliasie, przewiduj."""
+    """Full cycle: register, set the alias, load by alias, predict."""
     promote(register(_logged_run()))
     loaded = load_production()
     assert loaded.predict(np.array([[3.0]]))[0] in (0, 1)
 
 
 def test_promote_moves_the_alias_to_the_newer_version(tracking: str) -> None:
-    """Alias @production wskazuje dokładnie jeden model — ostatnio promowany."""
+    """The @production alias points at exactly one model, the last promoted."""
     from mlflow import MlflowClient
 
     promote(register(_logged_run()))
@@ -93,7 +92,7 @@ def test_promote_moves_the_alias_to_the_newer_version(tracking: str) -> None:
 
 
 def test_load_production_without_an_alias_fails_loudly(tracking: str) -> None:
-    """Brak championa to błąd, a nie ciche `None`."""
+    """A missing champion is an error, not a silent `None`."""
     with pytest.raises(Exception):  # noqa: B017
         load_production()
 
@@ -107,7 +106,7 @@ def test_list_models_logs_the_alias(
     assert any("@production" in r.getMessage() for r in caplog.records)
 
 
-# --- Eksport championa do kontenera (spec D7) ------------------------------
+# --- Exporting the champion to the container ---
 
 
 def test_export_champion_writes_a_loadable_bundle(
@@ -125,7 +124,7 @@ def test_export_champion_writes_a_loadable_bundle(
 def test_export_champion_stamps_registry_provenance(
     tracking: str, tmp_path: Path
 ) -> None:
-    """Wyeksportowany joblib musi wiedzieć, z której wersji rejestru pochodzi."""
+    """The exported joblib must record which registry version it came from."""
     from artifact import load_bundle
 
     mv = register(_logged_run_with_bundle(tmp_path))
@@ -143,7 +142,7 @@ def test_export_champion_stamps_registry_provenance(
 def test_export_champion_preserves_both_column_contracts(
     tracking: str, tmp_path: Path
 ) -> None:
-    """Eksport nie może zgubić input_groups — bez nich kontener nie wstanie."""
+    """The export must not lose input_groups, or the container cannot start."""
     from artifact import load_bundle
 
     promote(register(_logged_run_with_bundle(tmp_path)))
@@ -158,16 +157,16 @@ def test_export_champion_preserves_both_column_contracts(
 def test_export_champion_follows_the_alias_not_the_latest_version(
     tracking: str, tmp_path: Path
 ) -> None:
-    """Nowsza, NIEpromowana wersja nie może wyprzeć championa.
+    """A newer, unpromoted version must not displace the champion.
 
-    To jest sedno bramki jakości: model, który jej nie przeszedł, zostaje
-    w MLflow jako bieg, ale nie ma prawa trafić do kontenera.
+    This is the point of the quality gate: a model that did not pass stays in
+    MLflow as a run and has no right to reach the container.
     """
     from artifact import load_bundle
 
     promoted = register(_logged_run_with_bundle(tmp_path))
     promote(promoted)
-    register(_logged_run_with_bundle(tmp_path))  # nowsza wersja, bez promocji
+    register(_logged_run_with_bundle(tmp_path))  # newer version, not promoted
 
     dest = tmp_path / "exported.joblib"
     export_champion(dest=dest)
@@ -175,18 +174,16 @@ def test_export_champion_follows_the_alias_not_the_latest_version(
 
 
 def test_log_model_handles_our_custom_pipeline_types(tracking: str) -> None:
-    """Pipeline z FeatureEngineer i XGBoostem musi dać się zalogować do MLflow.
+    """A pipeline with FeatureEngineer and XGBoost must log to MLflow.
 
-    Regresja: MLflow 3.15 domyślnie serializuje sklearn przez **skops**, który
-    odmawia zapisu klas spoza listy zaufanych i wywala się na naszym pipelinie:
+    Regression: MLflow 3.15 serializes sklearn through skops by default, which
+    refuses classes outside its trusted list and fails on this pipeline:
 
         UntrustedTypesFoundException: ['features.FeatureEngineer',
         'numpy.dtype', 'xgboost.core.Booster', 'xgboost.sklearn.XGBClassifier']
 
-    Bramka jakości przeszła, a mimo to nic nie zostało zarejestrowane —
-    awaria pojawiła się dopiero na prawdziwych danych, po pełnym treningu.
-    Ten test odtwarza ją na 240 wierszach, żeby następnym razem kosztowała
-    sekundy, a nie kwadrans.
+    The quality gate passed and nothing was registered; the failure appeared only
+    on real data, after a full training run. This reproduces it on 240 rows.
     """
     import numpy as np
     import pandas as pd
@@ -214,8 +211,8 @@ def test_log_model_handles_our_custom_pipeline_types(tracking: str) -> None:
         numeric=("AMT_INCOME_TOTAL", "AMT_CREDIT"), categorical=(), binary=()
     )
 
-    # Pipeline z NASZYM transformerem i XGBoostem — dokładnie ten skład,
-    # na którym padł prawdziwy bieg.
+    # A pipeline with this project's transformer and XGBoost: exactly the
+    # composition the real run failed on.
     pipeline = (
         Preprocessor(groups)
         .build_pipeline(
@@ -240,7 +237,7 @@ def test_log_model_handles_our_custom_pipeline_types(tracking: str) -> None:
 
 
 def test_production_metrics_is_none_before_any_promotion(tracking: str) -> None:
-    """Pierwszy champion nie ma z czym się porównywać — to nie jest błąd."""
+    """The first champion has nothing to compare against; that is not an error."""
     from registry import production_metrics
 
     assert production_metrics() is None
@@ -262,7 +259,7 @@ def test_production_metrics_reads_the_promoted_runs_metrics(tracking: str) -> No
 
 
 def test_production_metrics_follows_the_alias(tracking: str) -> None:
-    """Po przeniesieniu aliasu porównujemy się z NOWYM championem."""
+    """After the alias moves, the comparison uses the new champion."""
     from registry import production_metrics
 
     versions = []

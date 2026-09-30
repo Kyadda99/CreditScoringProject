@@ -1,4 +1,4 @@
-"""Testy zapisu i odczytu artefaktu modelu."""
+"""Model artifact save and load tests."""
 
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ def test_round_trip_preserves_predictions(
 def test_round_trip_preserves_groups(
     tmp_path: Path, fitted_pipeline: Pipeline, groups: FeatureGroups
 ) -> None:
-    """Sedno pakietu: grupy nie mogą rozjechać się z pipeline'em."""
+    """The groups must not drift apart from the pipeline."""
     path = save_bundle(fitted_pipeline, groups, groups, {}, tmp_path / "m.joblib")
     assert load_bundle(path).groups == groups
 
@@ -87,9 +87,9 @@ def test_save_creates_missing_parent_directories(
 
 
 def test_load_missing_file_raises_with_a_useful_message(tmp_path: Path) -> None:
-    """Komunikat ma wskazywać, co uruchomić — to najczęstsza przyczyna."""
+    """The message must name what to run; that is the usual cause."""
     with pytest.raises(FileNotFoundError, match="cs-train"):
-        load_bundle(tmp_path / "nie-ma-mnie.joblib")
+        load_bundle(tmp_path / "does-not-exist.joblib")
 
 
 def test_bundle_is_immutable(
@@ -102,7 +102,7 @@ def test_bundle_is_immutable(
         bundle.pipeline = None  # type: ignore[misc]
 
 
-# --- Faza 2: dwa kontrakty w jednym artefakcie (spec D2) -------------------
+# --- Two contracts in one artifact ---
 
 
 def test_bundle_round_trips_both_contracts(tmp_path: Path) -> None:
@@ -120,7 +120,7 @@ def test_bundle_round_trips_both_contracts(tmp_path: Path) -> None:
 
 
 def test_the_two_contracts_are_allowed_to_differ(tmp_path: Path) -> None:
-    """Sedno D2: model konsumuje cechy, których klient nie może przysłać."""
+    """The model consumes features the client cannot send."""
     from sklearn.dummy import DummyClassifier
 
     model = FeatureGroups(numeric=("RATIO",), categorical=(), binary=())
@@ -132,7 +132,7 @@ def test_the_two_contracts_are_allowed_to_differ(tmp_path: Path) -> None:
 
 
 def test_a_phase_1_artifact_fails_loudly(tmp_path: Path) -> None:
-    """Stary artefakt bez kontraktu wejściowego musi wywalić się od razu."""
+    """An old artifact without an input contract must fail immediately."""
     import joblib
 
     path = tmp_path / "old.joblib"

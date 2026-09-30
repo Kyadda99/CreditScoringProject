@@ -1,13 +1,11 @@
-"""Wczytywanie surowych danych i higiena wierszy.
+"""Raw data loading and row hygiene.
 
-Podział obowiązków po Fazie 2 (spec D4): tutaj mieszka **wyłącznie** to, co
-nie ma sensu poza zbiorem treningowym — odrzucenie wierszy bez celu i wierszy
-z `CODE_GENDER == "XNA"`.
+This module holds only what makes no sense outside the training set: dropping
+rows without a target and rows with `CODE_GENDER == "XNA"`.
 
-Czyszczenie **kolumn** — sentinel `DAYS_EMPLOYED == 365243`, imputacja, cechy
-pochodne — mieszka w `features/`, wewnątrz pipeline'u. Powód: klient `/score`
-może przysłać sentinel, a kod wykonywany tylko przy wczytywaniu CSV nie
-obroniłby produkcji.
+Column cleaning (the `DAYS_EMPLOYED` sentinel, imputation, derived features)
+lives in `features/`, inside the pipeline, because a `/score` client can send a
+sentinel and code that runs only when reading the CSV would not catch it.
 """
 
 from __future__ import annotations
@@ -23,66 +21,65 @@ logger = logging.getLogger(__name__)
 
 
 def drop_unusable_rows(df: pd.DataFrame) -> pd.DataFrame:
-    """Usuwa wiersze, których nie da się użyć do uczenia.
+    """Drop rows that cannot be used for training.
 
-    Wyłącznie higiena **wierszy**, i wyłącznie taka, która nie ma sensu poza
-    zbiorem treningowym (spec D4). Wszystko, co klient `/score` mógłby przysłać
-    źle — sentinele, braki, wartości spoza zakresu — mieszka w `FeatureEngineer`
-    i w dopasowanym imputerze, bo tylko tam zadziała także w produkcji.
+    Row hygiene only, and only the kind that makes no sense outside the
+    training set. Anything a `/score` client could send wrong lives in
+    `FeatureEngineer` and the fitted imputer, where it also applies in
+    production.
 
     Args:
-        df: Ramka; brakujące kolumny są tolerowane, żeby dało się wywołać to
-            także na ramce bez celu.
+        df: Frame; missing columns are tolerated so this can also run on a
+            frame without the target.
 
     Returns:
-        Nowa ramka bez wierszy z brakującym celem i bez `CODE_GENDER == "XNA"`.
+        A new frame without rows missing the target or with
+        `CODE_GENDER == "XNA"`.
     """
     frame = df
     if TARGET in frame.columns:
         frame = frame[frame[TARGET].notna()]
     if "CODE_GENDER" in frame.columns:
-        # "XNA" to nie trzecia kategoria płci, tylko brak zapisany tekstem.
-        # Czterech wierszy na 307 tysięcy nie warto imputować — one-hot
-        # zrobiłby z tego osobną kolumnę o czterech obserwacjach.
+        # "XNA" is a missing value written as text, not a third category.
+        # Four rows in 307k; one-hot would give them their own column.
         frame = frame[frame["CODE_GENDER"] != "XNA"]
     if len(frame) == len(df):
         return df
-    logger.info("Higiena wierszy: %d -> %d.", len(df), len(frame))
+    logger.info("Row hygiene: %d -> %d.", len(df), len(frame))
     return frame.reset_index(drop=True)
 
 
 def load_data(path: Path | None = None) -> pd.DataFrame:
-    """Wczytuje `application_train.csv` do ramki danych.
+    """Load `application_train.csv` into a data frame.
 
     Args:
-        path: Ścieżka do pliku CSV. Domyślnie `config.DATA_PATH`.
+        path: Path to the CSV file. Defaults to `config.DATA_PATH`.
 
     Returns:
-        Surowa ramka danych — bez czyszczenia, z typami nadanymi przez pandas.
+        The raw frame, uncleaned, with dtypes as pandas inferred them.
 
     Raises:
-        FileNotFoundError: Gdy plik nie istnieje; komunikat wskazuje skrypt
-            pobierający, bo to najczęstsza przyczyna.
+        FileNotFoundError: When the file is absent; the message points at the
+            download script, the usual cause.
     """
     path = DATA_PATH if path is None else path
     if not path.exists():
         raise FileNotFoundError(
-            f"Brak pliku z danymi: {path}\n" "Uruchom: uv run cs-download"
+            f"Missing data file: {path}\n" "Run: uv run cs-download"
         )
 
-    logger.info("Wczytuję %s ...", path)
+    logger.info("Loading %s ...", path)
     df = pd.read_csv(path)
 
-    # `pd.to_numeric(errors="coerce")` zamiast `astype`: astype po cichu zawija
-    # przy zwezaniu (300 -> 44 dla int8), wiec uszkodzony plik przeszedlby przez
-    # loader wygladajac poprawnie. Coerce zamienia smieci na NaN, co kontrakt
-    # widzi i odrzuca. Zadnego zwezania typu - kontrakt ma ogladac to, co jest
-    # w CSV, a nie to, co loader z tego zrobil.
+    # to_numeric(errors="coerce") rather than astype: astype wraps silently
+    # when narrowing (300 -> 44 for int8), so a corrupt file would pass the
+    # loader looking correct. Coerce turns junk into NaN, which the contract
+    # rejects. No narrowing: the contract must see what the CSV holds.
     for column in (ID_COLUMN, TARGET):
         if column in df.columns:
             df[column] = pd.to_numeric(df[column], errors="coerce")
 
     df = drop_unusable_rows(df)
 
-    logger.info("Wczytano %d wierszy x %d kolumn.", len(df), df.shape[1])
+    logger.info("Loaded %d rows x %d columns.", len(df), df.shape[1])
     return df

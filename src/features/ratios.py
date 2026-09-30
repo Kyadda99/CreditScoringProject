@@ -1,13 +1,11 @@
-"""Cechy pochodne — jedna czysta funkcja na cechę.
+"""Derived features: one pure function per feature.
 
-Każda bierze ramkę i zwraca serię o tym samym indeksie. Nic tu nie ma stanu,
-więc każdą da się przetestować wartością policzoną ręcznie (spec, T1).
+Each takes a frame and returns a series on the same index. Nothing holds state.
 
-Reguła nadrzędna (spec D5): **żaden iloraz nie zwraca ±inf**. Faza 1 ustawiła
-`allow_inf_nan=False` na modelu żądania, a `SimpleImputer` traktuje `inf` jak
-zwykłą wartość i psuje średnią oraz wariancję całej kolumny w `StandardScaler`.
-Zero i brak w mianowniku dają NaN — czyli dokładnie to, co dopasowany imputer
-umie obsłużyć.
+The governing rule: no ratio returns +/-inf. The request model sets
+`allow_inf_nan=False`, and `SimpleImputer` treats `inf` as an ordinary value,
+which corrupts the mean and variance of the whole column in `StandardScaler`.
+A zero or missing denominator yields NaN, which the fitted imputer handles.
 """
 
 from __future__ import annotations
@@ -32,20 +30,19 @@ EXT_SOURCE_COLUMNS: tuple[str, ...] = ("EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOUR
 
 
 def _safe_divide(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
-    """Dzieli tak, żeby wynik NIGDY nie był ±inf (spec D5).
+    """Divide so the result is never +/-inf.
 
-    Zero w mianowniku zamieniamy na NaN *przed* dzieleniem, a nie po — po
-    dzieleniu byłoby już za późno, bo `0 / 0` daje NaN, a `1 / 0` daje inf
-    i trzeba by rozróżniać dwa przypadki. Dodatkowe czyszczenie wyniku łapie
-    nadmiar zmiennoprzecinkowy przy skrajnych kwotach.
+    A zero denominator becomes NaN before the division, not after: afterwards
+    `0 / 0` gives NaN while `1 / 0` gives inf, which would need two cases. The
+    extra cleanup catches float overflow on extreme amounts.
 
     Args:
-        numerator: Licznik.
-        denominator: Mianownik.
+        numerator: Numerator.
+        denominator: Denominator.
 
     Returns:
-        Seria `float64`; NaN wszędzie tam, gdzie mianownik jest zerem lub
-        brakiem, albo gdzie wynik przekroczył zakres float.
+        A `float64` series; NaN wherever the denominator is zero or missing, or
+        the result overflowed float range.
     """
     denom = denominator.astype("float64").mask(denominator == 0)
     result = numerator.astype("float64") / denom
@@ -53,7 +50,7 @@ def _safe_divide(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
 
 
 def credit_income_ratio(frame: pd.DataFrame) -> pd.Series:
-    """`AMT_CREDIT / AMT_INCOME_TOTAL` — dźwignia."""
+    """`AMT_CREDIT / AMT_INCOME_TOTAL`: leverage."""
     return _safe_divide(
         _numeric_column(frame, "AMT_CREDIT"),
         _numeric_column(frame, "AMT_INCOME_TOTAL"),
@@ -61,7 +58,7 @@ def credit_income_ratio(frame: pd.DataFrame) -> pd.Series:
 
 
 def annuity_income_ratio(frame: pd.DataFrame) -> pd.Series:
-    """`AMT_ANNUITY / AMT_INCOME_TOTAL` — obciążenie ratą (debt-to-income)."""
+    """`AMT_ANNUITY / AMT_INCOME_TOTAL`: debt-to-income."""
     return _safe_divide(
         _numeric_column(frame, "AMT_ANNUITY"),
         _numeric_column(frame, "AMT_INCOME_TOTAL"),
@@ -69,7 +66,7 @@ def annuity_income_ratio(frame: pd.DataFrame) -> pd.Series:
 
 
 def credit_term(frame: pd.DataFrame) -> pd.Series:
-    """`AMT_ANNUITY / AMT_CREDIT` — odwrotność domyślnej długości kredytu."""
+    """`AMT_ANNUITY / AMT_CREDIT`: inverse of the implied loan term."""
     return _safe_divide(
         _numeric_column(frame, "AMT_ANNUITY"),
         _numeric_column(frame, "AMT_CREDIT"),
@@ -77,7 +74,7 @@ def credit_term(frame: pd.DataFrame) -> pd.Series:
 
 
 def goods_credit_ratio(frame: pd.DataFrame) -> pd.Series:
-    """`AMT_GOODS_PRICE / AMT_CREDIT` — przybliżenie wkładu własnego."""
+    """`AMT_GOODS_PRICE / AMT_CREDIT`: proxy for the down payment."""
     return _safe_divide(
         _numeric_column(frame, "AMT_GOODS_PRICE"),
         _numeric_column(frame, "AMT_CREDIT"),
@@ -85,7 +82,7 @@ def goods_credit_ratio(frame: pd.DataFrame) -> pd.Series:
 
 
 def income_per_person(frame: pd.DataFrame) -> pd.Series:
-    """`AMT_INCOME_TOTAL / CNT_FAM_MEMBERS` — dochód na osobę w gospodarstwie."""
+    """`AMT_INCOME_TOTAL / CNT_FAM_MEMBERS`: income per household member."""
     return _safe_divide(
         _numeric_column(frame, "AMT_INCOME_TOTAL"),
         _numeric_column(frame, "CNT_FAM_MEMBERS"),
@@ -93,10 +90,10 @@ def income_per_person(frame: pd.DataFrame) -> pd.Series:
 
 
 def employed_age_ratio(frame: pd.DataFrame) -> pd.Series:
-    """Staż pracy w relacji do wieku.
+    """Length of employment relative to age.
 
-    Liczony na `DAYS_EMPLOYED` **po dekodowaniu sentinela** — na surowej
-    wartości 365243 iloraz wyszedłby ujemny i bez sensu.
+    Computed on `DAYS_EMPLOYED` after sentinel decoding; on the raw 365243 the
+    ratio would come out negative and meaningless.
     """
     return _safe_divide(
         days_employed_cleaned(frame),
@@ -105,29 +102,27 @@ def employed_age_ratio(frame: pd.DataFrame) -> pd.Series:
 
 
 def bureau_inquiry_total(frame: pd.DataFrame) -> pd.Series:
-    """Łączna liczba zapytań do biura kredytowego.
-
-    To cecha "liczba zapytań kredytowych" wprost wymieniona w `CLAUDE.md`.
+    """Total number of credit bureau inquiries.
 
     Returns:
-        Suma sześciu kolumn. `min_count=1` sprawia, że wiersz z samymi brakami
-        daje NaN, a nie 0.0 — "nie wiem" nie może udawać "zero zapytań".
+        Sum of the six columns. `min_count=1` makes an all-missing row yield
+        NaN rather than 0.0, so "unknown" cannot pass for "zero inquiries".
     """
     columns = [_numeric_column(frame, name) for name in BUREAU_INQUIRY_COLUMNS]
     return pd.concat(columns, axis=1).sum(axis=1, min_count=1)
 
 
 def ext_source_mean(frame: pd.DataFrame) -> pd.Series:
-    """Średnia z trzech zewnętrznych scoringów, po dostępnych wartościach."""
+    """Mean of the three external scores, over the available values."""
     columns = [_numeric_column(frame, name) for name in EXT_SOURCE_COLUMNS]
     return pd.concat(columns, axis=1).mean(axis=1)
 
 
 def ext_source_count(frame: pd.DataFrame) -> pd.Series:
-    """Ile z trzech scoringów w ogóle jest.
+    """How many of the three external scores are present.
 
-    Brak jest tu cechą, nie usterką (spec D3): liczba dostępnych scoringów sama
-    w sobie mówi coś o kliencie.
+    Absence is itself a signal here: the number of available scores says
+    something about the client.
     """
     columns = [_numeric_column(frame, name) for name in EXT_SOURCE_COLUMNS]
     return pd.concat(columns, axis=1).notna().sum(axis=1).astype("float64")
@@ -144,8 +139,7 @@ RATIO_FUNCTIONS: dict[str, Callable[[pd.DataFrame], pd.Series]] = {
     "GOODS_CREDIT_RATIO": goods_credit_ratio,
     "INCOME_PER_PERSON": income_per_person,
 }
-"""Nazwa cechy -> funkcja. `FeatureEngineer` iteruje po tym słowniku.
+"""Feature name -> function. `FeatureEngineer` iterates over this mapping.
 
-Klucze muszą pokrywać się z `config.ENGINEERED_FEATURES` — pilnuje tego test
-w `tests/test_features_engineer.py`.
+The keys must match `config.ENGINEERED_FEATURES`; a test enforces that.
 """

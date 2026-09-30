@@ -1,9 +1,8 @@
-"""Budowanie preprocessora — składanie, nigdy dopasowywanie.
+"""Preprocessor assembly: builds, never fits.
 
-Każda grupa cech z `config.FeatureGroups` dostaje własny pipeline, bo wymaga
-innego traktowania. Zwracany `ColumnTransformer` jest **niedopasowany**:
-dopasowanie należy do `train.py`, wewnątrz jednego `Pipeline` razem z modelem,
-żeby nie dało się przypadkiem nauczyć imputera na zbiorze testowym.
+Each feature group gets its own pipeline. The returned `ColumnTransformer` is
+unfitted; fitting happens inside a single `Pipeline` with the model so the
+imputer cannot be learned on the test set.
 """
 
 from __future__ import annotations
@@ -20,18 +19,17 @@ def build_preprocessor(
     groups: FeatureGroups,
     informative_missing: tuple[str, ...] = INFORMATIVE_MISSING,
 ) -> ColumnTransformer:
-    """Składa preprocessor dopasowany do podziału kolumn na grupy.
+    """Assemble a preprocessor for the given column groups.
 
     Args:
-        groups: Grupy cech wyprowadzone **raz**, na ramce treningowej.
-        informative_missing: Kolumny numeryczne, w których brak niesie sygnał
-            (spec D3). Dostają ten sam pipeline plus `add_indicator=True`.
-            Nazwy spoza `groups.numeric` są ignorowane — kolumna usunięta
-            z modelu nie może wrócić bocznymi drzwiami.
+        groups: Feature groups derived once on the training frame.
+        informative_missing: Numeric columns whose missingness carries signal.
+            They get the same pipeline plus `add_indicator=True`. Names outside
+            `groups.numeric` are ignored, so a dropped column cannot return.
 
     Returns:
-        Niedopasowany `ColumnTransformer`. Kolumny spoza grup są odrzucane
-        (`remainder="drop"`) — cel i identyfikator nie mogą wejść do modelu.
+        An unfitted `ColumnTransformer`. Columns outside the groups are dropped
+        (`remainder="drop"`), keeping the target and id out of the model.
     """
     informative = [c for c in groups.numeric if c in set(informative_missing)]
     plain_numeric = [c for c in groups.numeric if c not in set(informative)]
@@ -42,9 +40,8 @@ def build_preprocessor(
             ("scale", StandardScaler()),
         ]
     )
-    # Ta sama imputacja, plus kolumna 0/1 mówiąca "tu było pusto". Wskaźnik idzie
-    # przez ten sam StandardScaler co wartość — po standaryzacji flaga 0/1 dalej
-    # rozróżnia dwa stany, więc osobna ścieżka nic by nie wniosła poza złożonością.
+    # Same imputation plus a 0/1 column marking where the value was missing.
+    # The indicator goes through the same StandardScaler as the value.
     numeric_informative = Pipeline(
         [
             ("impute", SimpleImputer(strategy="median", add_indicator=True)),
@@ -54,14 +51,14 @@ def build_preprocessor(
     categorical = Pipeline(
         [
             ("impute", SimpleImputer(strategy="most_frequent")),
-            # handle_unknown="ignore": w produkcji pojawi się wartość, której
-            # nie było w treningu. Bez tego encoder rzuca wyjątkiem, a /score
-            # zwraca 500 zamiast wyniku.
+            # handle_unknown="ignore": production will see categories
+            # absent from training; without this the encoder raises and
+            # /score returns 500.
             ("encode", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
         ]
     )
-    # Flagi 0/1 wymagają tylko imputacji — skalowanie nic by nie wniosło,
-    # a utrudniłoby interpretację współczynników regresji.
+    # 0/1 flags need imputation only; scaling would obscure regression
+    # coefficients without adding anything.
     binary = Pipeline([("impute", SimpleImputer(strategy="most_frequent"))])
 
     transformers: list[tuple[str, Pipeline, list[str]]] = [
@@ -69,9 +66,8 @@ def build_preprocessor(
         ("categorical", categorical, list(groups.categorical)),
         ("binary", binary, list(groups.binary)),
     ]
-    # Gałąź dokładana warunkowo: `ColumnTransformer` z pustą listą kolumn bywa
-    # kapryśny przy `get_feature_names_out`, a pusty transformer i tak niczego
-    # nie liczy.
+    # Added conditionally: ColumnTransformer with an empty column list is
+    # unreliable in get_feature_names_out.
     if informative:
         transformers.insert(
             1, ("numeric_informative", numeric_informative, informative)

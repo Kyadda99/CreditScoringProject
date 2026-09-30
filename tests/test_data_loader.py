@@ -1,4 +1,4 @@
-"""Kontrakt DataLoadera: wczytanie, podział i dwa kontrakty kolumn."""
+"""DataLoader contract: loading, splitting and both column contracts."""
 
 from __future__ import annotations
 

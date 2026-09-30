@@ -1,4 +1,4 @@
-"""Testy generowanego schematu żądania."""
+"""Tests for the generated request schema."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from artifact import load_bundle
 
 
 def test_empty_payload_is_valid() -> None:
-    """Każde pole jest opcjonalne — imputer uzupełni resztę."""
+    """Every field is optional; the imputer fills the rest."""
     assert ScoreRequest().model_dump(exclude_none=True) == {}
 
 
@@ -22,13 +22,13 @@ def test_partial_payload_is_valid() -> None:
 
 
 def test_unknown_field_is_rejected() -> None:
-    """extra='forbid' — literówka w nazwie kolumny ma być błędem, nie ciszą."""
+    """extra="forbid": a misspelled column name must be an error, not silence."""
     with pytest.raises(ValidationError):
         ScoreRequest(NIE_MA_TAKIEJ_KOLUMNY=1.0)
 
 
 def test_target_and_id_are_not_accepted() -> None:
-    """Cel i identyfikator nie są cechami; przysłanie ich to pomyłka."""
+    """The target and id are not features; sending them is a mistake."""
     with pytest.raises(ValidationError):
         ScoreRequest(TARGET=1)
     with pytest.raises(ValidationError):
@@ -37,7 +37,7 @@ def test_target_and_id_are_not_accepted() -> None:
 
 def test_wrong_type_is_rejected() -> None:
     with pytest.raises(ValidationError):
-        ScoreRequest(AMT_INCOME_TOTAL="nie liczba")
+        ScoreRequest(AMT_INCOME_TOTAL="not a number")
 
 
 def test_categorical_field_accepts_a_string() -> None:
@@ -47,10 +47,10 @@ def test_categorical_field_accepts_a_string() -> None:
 
 @pytest.mark.requires_data
 def test_schema_matches_the_trained_bundle() -> None:
-    """Sedno D5: commitowany kontrakt i artefakt nie mogą się rozjechać.
+    """The committed contract and the artifact must not drift apart.
 
-    Od Fazy 2 porównujemy kontrakt **wejściowy** (spec D2) — grupy modelu
-    zawierają cechy pochodne, których `feature_schema.json` z definicji nie zna.
+    The comparison uses the input contract; the model groups contain derived
+    features that `feature_schema.json` by definition does not know.
     """
     assert load_feature_groups() == load_bundle().input_groups
 
@@ -61,7 +61,7 @@ def test_response_rejects_a_probability_outside_zero_one() -> None:
 
 
 def test_schema_matches_the_bundle_input_contract(synthetic_artifact: Path) -> None:
-    """T5 — kontrakt commitowany i artefakt nie mogą się rozjechać."""
+    """The committed contract and the artifact must not drift apart."""
     from api.schemas import FEATURE_GROUPS
     from artifact import load_bundle
 

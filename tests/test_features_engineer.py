@@ -1,4 +1,4 @@
-"""Testy transformera cech."""
+"""Feature transformer tests."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ def frame() -> pd.DataFrame:
 
 
 def test_registry_matches_the_config_contract() -> None:
-    """`RATIO_FUNCTIONS` i `ENGINEERED_FEATURES` nie mogą się rozjechać."""
+    """`RATIO_FUNCTIONS` and `ENGINEERED_FEATURES` must not drift apart."""
     assert set(RATIO_FUNCTIONS) == set(ENGINEERED_FEATURES)
 
 
@@ -43,7 +43,7 @@ def test_transform_adds_every_engineered_column(frame: pd.DataFrame) -> None:
 
 
 def test_transform_keeps_the_raw_columns(frame: pd.DataFrame) -> None:
-    """Kolumny surowe zostają — o wyborze decyduje `ColumnTransformer`."""
+    """Raw columns stay; `ColumnTransformer` decides what is used."""
     result = FeatureEngineer().fit_transform(frame)
     assert "NAME_CONTRACT_TYPE" in result.columns
     assert "AMT_CREDIT" in result.columns
@@ -56,7 +56,7 @@ def test_transform_decodes_the_sentinel_in_place(frame: pd.DataFrame) -> None:
 
 
 def test_flag_is_added_even_with_no_engineered_features(frame: pd.DataFrame) -> None:
-    """Transza 1 (spec D7): czyszczenie tak, ilorazy nie."""
+    """Cleaning on, ratios off."""
     result = FeatureEngineer(features=()).fit_transform(frame)
     assert FLAG_NOT_EMPLOYED in result.columns
     assert "CREDIT_INCOME_RATIO" not in result.columns
@@ -69,7 +69,7 @@ def test_input_frame_is_not_mutated(frame: pd.DataFrame) -> None:
 
 
 def test_transform_is_total_on_a_partial_row(frame: pd.DataFrame) -> None:
-    """Klient /score przysyła podzbiór pól — brak kolumny to NaN, nie KeyError."""
+    """A /score client sends a subset; a missing column is NaN, not KeyError."""
     engineer = FeatureEngineer().fit(frame)
     partial = pd.DataFrame({"AMT_CREDIT": [1000.0]})
     result = engineer.transform(partial)
@@ -79,7 +79,7 @@ def test_transform_is_total_on_a_partial_row(frame: pd.DataFrame) -> None:
 def test_fit_rejects_a_training_frame_missing_a_source_column(
     frame: pd.DataFrame,
 ) -> None:
-    """Przy treningu brak kolumny źródłowej to błąd pipeline'u, nie żądania."""
+    """At training, a missing source column is a pipeline fault, not a request."""
     with pytest.raises(ValueError, match="AMT_INCOME_TOTAL"):
         FeatureEngineer().fit(frame.drop(columns=["AMT_INCOME_TOTAL"]))
 
@@ -93,7 +93,7 @@ def test_get_feature_names_out_matches_transform(frame: pd.DataFrame) -> None:
 def test_transformer_survives_a_joblib_round_trip(
     frame: pd.DataFrame, tmp_path: Path
 ) -> None:
-    """Transformer jedzie w artefakcie — musi się piklować."""
+    """The transformer travels in the artifact, so it must pickle."""
     engineer = FeatureEngineer().fit(frame)
     path = tmp_path / "engineer.joblib"
     joblib.dump(engineer, path)
@@ -102,6 +102,6 @@ def test_transformer_survives_a_joblib_round_trip(
 
 
 def test_clone_preserves_the_features_parameter() -> None:
-    """`clone` wymaga, żeby __init__ zapisywał parametry bez zmian."""
+    """`clone` requires __init__ to store its parameters unchanged."""
     engineer = FeatureEngineer(features=("CREDIT_TERM",))
     assert clone(engineer).features == ("CREDIT_TERM",)

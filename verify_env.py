@@ -1,8 +1,8 @@
-"""Szybki przegląd środowiska — uruchamiany na początku sesji.
+"""Quick environment check.
 
-Raportuje wersje bibliotek, dostępność GPU i obecność zbioru danych.
-Kończy się kodem != 0, gdy czegoś krytycznego brakuje, żeby dało się go wpiąć
-w skrypt czy CI.
+Reports library versions, GPU availability and whether the dataset is present.
+Exits non-zero when something required is missing, so it can be used in a
+script or in CI.
 
 Usage:
     uv run python verify_env.py
@@ -15,8 +15,7 @@ import importlib.metadata
 import platform
 import sys
 
-# Biblioteki dochodzą fazami: pandas w Fazie 0, scikit-learn w Fazie 1,
-# torch w Fazie 4. Brak tych późniejszych to informacja, nie błąd.
+# Optional libraries are reported as information, not as an error.
 REQUIRED: tuple[str, ...] = ("pandas", "numpy")
 OPTIONAL: tuple[str, ...] = (
     "scikit-learn",
@@ -31,7 +30,7 @@ OPTIONAL: tuple[str, ...] = (
 
 
 def _version(dist: str) -> str | None:
-    """Zwraca wersję zainstalowanej dystrybucji albo None."""
+    """Return the installed distribution version, or None."""
     try:
         return importlib.metadata.version(dist)
     except importlib.metadata.PackageNotFoundError:
@@ -39,13 +38,13 @@ def _version(dist: str) -> str | None:
 
 
 def _report_packages() -> bool:
-    """Wypisuje wersje bibliotek. Zwraca False, gdy brakuje wymaganej."""
+    """Print library versions. Return False when a required one is missing."""
     ok = True
-    print("Biblioteki")
+    print("Libraries")
     for dist in REQUIRED:
         version = _version(dist)
         if version is None:
-            print(f"  [BRAK] {dist:<20} wymagane — uruchom `uv sync`")
+            print(f"  [MISS] {dist:<20} required - run `uv sync`")
             ok = False
         else:
             print(f"  [ OK ] {dist:<20} {version}")
@@ -54,35 +53,35 @@ def _report_packages() -> bool:
         status = (
             f"[ OK ] {dist:<20} {version}"
             if version
-            else f"[  - ] {dist:<20} jeszcze niepotrzebne"
+            else f"[  - ] {dist:<20} not needed yet"
         )
         print(f"  {status}")
     return ok
 
 
 def _report_gpu() -> None:
-    """Wypisuje status GPU. Brak torcha nie jest błędem przed Fazą 4."""
+    """Print GPU status. A missing torch is not an error."""
     print("\nGPU")
     if _version("torch") is None:
-        print("  [  - ] torch niezainstalowany — sprawdzenie GPU odłożone do Fazy 4")
+        print("  [  - ] torch not installed - GPU check skipped")
         return
     torch = importlib.import_module("torch")
     if torch.cuda.is_available():
-        print(f"  [ OK ] CUDA {torch.version.cuda} — {torch.cuda.get_device_name(0)}")
+        print(f"  [ OK ] CUDA {torch.version.cuda} - {torch.cuda.get_device_name(0)}")
     elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
         print("  [ OK ] MPS (Apple Silicon)")
     else:
-        print("  [ !! ] Brak akceleratora — trening NN pójdzie na CPU")
+        print("  [ !! ] No accelerator - neural network training runs on CPU")
 
 
 def _report_data() -> bool:
-    """Wypisuje status zbioru danych. Zwraca False, gdy pliku nie ma."""
+    """Print dataset status. Return False when the file is absent."""
     from config import DATA_PATH
 
-    print("\nDane")
+    print("\nData")
     if not DATA_PATH.exists():
-        print(f"  [BRAK] {DATA_PATH}")
-        print("         uruchom: uv run cs-download")
+        print(f"  [MISS] {DATA_PATH}")
+        print("         run: uv run cs-download")
         return False
     size_mb = DATA_PATH.stat().st_size / 1024**2
     print(f"  [ OK ] {DATA_PATH.name} ({size_mb:.1f} MB)")
@@ -90,17 +89,17 @@ def _report_data() -> bool:
 
 
 def main() -> int:
-    """Uruchamia wszystkie kontrole. Zwraca kod wyjścia procesu."""
+    """Run every check. Return the process exit code."""
     host = f"{platform.system()} {platform.machine()}"
-    print(f"Python {platform.python_version()} na {host}\n")
+    print(f"Python {platform.python_version()} on {host}\n")
     packages_ok = _report_packages()
     _report_gpu()
     data_ok = _report_data()
 
     if packages_ok and data_ok:
-        print("\nŚrodowisko gotowe.")
+        print("\nEnvironment ready.")
         return 0
-    print("\nŚrodowisko niekompletne — zobacz [BRAK] powyżej.")
+    print("\nEnvironment incomplete - see [MISS] above.")
     return 1
 
 

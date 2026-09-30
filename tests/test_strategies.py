@@ -1,4 +1,4 @@
-"""Kontrakt strategii estymatora i strategii niezbalansowania."""
+"""Estimator strategy and imbalance strategy contract."""
 
 from __future__ import annotations
 
@@ -24,9 +24,9 @@ def test_registries_cover_the_documented_names() -> None:
 
 
 def test_unknown_names_are_rejected() -> None:
-    with pytest.raises(ValueError, match="Nieznany"):
+    with pytest.raises(ValueError, match="Unknown estimator"):
         get_estimator_strategy("magic_forest")
-    with pytest.raises(ValueError, match="Nieznane"):
+    with pytest.raises(ValueError, match="Unknown imbalance arm"):
         get_imbalance_strategy("undersample")
 
 
@@ -70,7 +70,7 @@ def test_each_build_returns_a_fresh_instance() -> None:
 
 
 def test_estimator_parameters_are_pinned() -> None:
-    """Parametry bazowe championa — zmiana tutaj zmienia metryki modelu."""
+    """Champion base parameters; changing these changes the model metrics."""
     logreg = get_estimator_strategy("logistic_regression").build(
         class_weighted=False, scale_pos_weight=1.0
     )
@@ -96,7 +96,7 @@ def test_estimator_parameters_are_pinned() -> None:
 
 
 def test_every_family_is_seeded() -> None:
-    """Powtarzalność stoi na jednym ziarnie w każdej rodzinie estymatorów."""
+    """Reproducibility rests on one seed in every estimator family."""
     for name in ESTIMATOR_STRATEGIES:
         estimator = get_estimator_strategy(name).build(
             class_weighted=False, scale_pos_weight=1.0
@@ -119,7 +119,7 @@ def test_each_family_builds_its_own_estimator_type() -> None:
 
 
 def test_registry_order_is_the_grid_order() -> None:
-    """Kolejność rejestru steruje siatką i rozstrzyga remisy przy championie."""
+    """Registry order drives the grid and breaks ties when picking a champion."""
     assert list(ESTIMATOR_STRATEGIES) == [
         "logistic_regression",
         "random_forest",

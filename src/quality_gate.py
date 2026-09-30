@@ -1,13 +1,9 @@
-"""Twarde progi, które model musi przejść, zanim trafi na alias @production.
+"""Hard thresholds a model must clear before it reaches the @production alias.
 
-Bramka jest **wywoływana** z `train.py` i `tune.py` przed `promote()`.
-W projekcie referencyjnym instruktora ten moduł istnieje, ale nie jest
-importowany nigdzie — obie ścieżki promocji wołają `promote()` bezwarunkowo.
-To najłatwiejszy błąd do odziedziczenia przez skopiowanie struktury i dlatego
-jest tu opisany wprost.
+The gate is called from `train.py` and `tune.py` before `promote()`.
 
-Nieudana bramka **nie jest wyjątkiem**: to normalny wynik biegu treningowego.
-Bieg kończy się, loguje komplet naruszeń i po prostu nie promuje.
+A failed gate is not an exception: it is a normal training outcome. The run
+finishes, logs every violation, and does not promote.
 """
 
 from __future__ import annotations
@@ -17,25 +13,25 @@ import logging
 logger = logging.getLogger(__name__)
 
 MIN_ROC_AUC = 0.75
-"""Bez regresji względem Fazy 2 (0.7515).
+"""No regression against the 0.7515 baseline.
 
-Model szeregujący ryzyko gorzej niż baseline nie ma po co jechać na produkcję,
-niezależnie od tego, jak dobrze wypada na pozostałych metrykach.
+A model that ranks risk worse than the baseline does not belong in production,
+however well it scores elsewhere.
 """
 
 MIN_RECALL = 0.50
-"""Powód istnienia całej fazy: baseline łapał 1.19% defaultów.
+"""The baseline caught 1.19% of defaults.
 
-Przy koszcie FN = 10 x FP model, który przepuszcza połowę defaultów, jest
-kosztowo nie do obrony — a to i tak próg łagodny.
+At FN = 10 x FP, a model that misses half the defaults cannot be justified on
+cost, and this is already a lenient threshold.
 """
 
 MIN_PRECISION = 0.12
-"""1.5x bazowa częstość 8.07%.
+"""1.5x the 8.07% base rate.
 
-Model oznaczający wnioski losowo trafiłby w okolice 0.08, więc ten próg
-wymaga realnego sygnału, a nie samej liczby alarmów. Bez niego kryterium
-recall dałoby się spełnić, oznaczając wszystkich.
+Flagging applications at random would land near 0.08, so this threshold
+requires real signal. Without it the recall criterion could be met by
+flagging everyone.
 """
 
 _CRITERIA: tuple[tuple[str, float], ...] = (
@@ -43,37 +39,37 @@ _CRITERIA: tuple[tuple[str, float], ...] = (
     ("recall", MIN_RECALL),
     ("precision", MIN_PRECISION),
 )
-"""Kryteria sprawdzane po kolei, wszystkie, bez short-circuitu."""
+"""Criteria checked in order, all of them, without short-circuiting."""
 
 
 def quality_gate(metrics: dict[str, float]) -> bool:
-    """Sprawdza, czy metryki pozwalają na promocję modelu.
+    """Check whether the metrics allow promoting the model.
 
     Args:
-        metrics: Słownik z `evaluate()`. Klucze spoza `_CRITERIA` są ignorowane
-            — bramka dostaje pełny kontrakt metryk i wybiera z niego swoje.
-            Brakujący klucz jest traktowany jak wartość dyskwalifikująca:
-            niekompletny pomiar to nie jest zgoda na promocję.
+        metrics: Dictionary from `evaluate()`. Keys outside `_CRITERIA` are
+            ignored. A missing key disqualifies: an incomplete measurement is
+            not consent to promote.
 
     Returns:
-        `True`, jeśli **wszystkie** kryteria są spełnione.
+        `True` when every criterion is met.
     """
     passed = True
     for key, minimum in _CRITERIA:
-        # -inf, nie 0: brak klucza ma przegrać z każdym progiem, także ujemnym.
+        # -inf, not 0: a missing key must lose to any threshold, including
+        # a negative one.
         value = metrics.get(key, float("-inf"))
         if value >= minimum:
-            logger.info("PRZYJĘTE  %-10s %.4f >= %.4f", key, value, minimum)
+            logger.info("ACCEPTED  %-10s %.4f >= %.4f", key, value, minimum)
         else:
-            logger.warning("ODRZUCONE %-10s %.4f <  %.4f", key, value, minimum)
+            logger.warning("REJECTED  %-10s %.4f <  %.4f", key, value, minimum)
             passed = False
 
-    logger.info("Bramka jakości: %s", "PRZESZŁA" if passed else "ODRZUCIŁA MODEL")
+    logger.info("Quality gate: %s", "PASSED" if passed else "FAILED")
     return passed
 
 
 CHAMPION_METRIC = "pr_auc"
-"""Metryka rozstrzygająca, kto jest championem (spec D1)."""
+"""Metric that decides the champion."""
 
 
 def beats_incumbent(
@@ -81,41 +77,37 @@ def beats_incumbent(
     incumbent: dict[str, float] | None,
     metric: str = CHAMPION_METRIC,
 ) -> bool:
-    """Sprawdza, czy kandydat jest lepszy od modelu obecnie na @production.
+    """Check whether the candidate beats the model currently on @production.
 
-    Progi bezwzględne z `quality_gate` nie wystarczają: model może je spełnić
-    i **jednocześnie** być gorszy od tego, który już jest na produkcji. Dokładnie
-    to zdarzyło się w tej fazie — strojony XGBoost przeszedł wszystkie trzy
-    kryteria i wyparł nietrojony model o wyższym PR-AUC (0.2564 vs 0.2626).
+    The absolute thresholds in `quality_gate` are not enough: a model can meet
+    them and still be worse than the one already in production. A tuned
+    XGBoost once passed all three criteria and displaced an untuned model with
+    a higher PR-AUC (0.2564 vs 0.2626).
 
-    Projekt referencyjny instruktora ma ten sam brak: `promote()` nadpisuje
-    alias bezwarunkowo, bez porównania z poprzednikiem.
-
-    Porównanie jest **ostre** (`>`): przy remisie zostaje ten, który już jest.
-    Wymiana modelu produkcyjnego kosztuje rebuild obrazu i weryfikację, więc
-    musi mieć uzasadnienie, a nie tylko brak przeciwwskazań.
+    The comparison is strict (`>`): on a tie the incumbent stays, because
+    replacing the production model costs an image rebuild and verification.
 
     Args:
-        candidate: Metryki kandydata z `evaluate()`.
-        incumbent: Metryki modelu spod aliasu, albo `None`, gdy aliasu nie ma
-            jeszcze wcale — wtedy kandydat wygrywa walkowerem.
-        metric: Klucz metryki rozstrzygającej.
+        candidate: Candidate metrics from `evaluate()`.
+        incumbent: Metrics of the aliased model, or `None` when no alias
+            exists yet, in which case the candidate wins by default.
+        metric: Key of the deciding metric.
 
     Returns:
-        `True`, jeśli kandydata należy promować.
+        `True` when the candidate should be promoted.
     """
     if incumbent is None:
-        logger.info("Brak modelu na @production — promuję kandydata walkowerem.")
+        logger.info("No model on @production - promoting candidate by default.")
         return True
 
     new = candidate.get(metric, float("-inf"))
     old = incumbent.get(metric, float("-inf"))
     if new > old:
-        logger.info("PRZYJĘTE  %s %.4f >  %.4f (obecny champion)", metric, new, old)
+        logger.info("ACCEPTED  %s %.4f >  %.4f (current champion)", metric, new, old)
         return True
 
     logger.warning(
-        "ODRZUCONE %s %.4f <= %.4f (obecny champion) — alias bez zmian",
+        "REJECTED  %s %.4f <= %.4f (current champion) - alias unchanged",
         metric,
         new,
         old,

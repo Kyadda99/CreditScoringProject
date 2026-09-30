@@ -1,4 +1,4 @@
-"""Kontrakt przepływu treningowego: kolejność kroków, ponawianie, cache."""
+"""Training flow contract: step order, retries, caching."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from test_characterisation import synthetic_frame
 
 @pytest.fixture(scope="module", autouse=True)
 def prefect_harness() -> Iterator[None]:
-    """Uruchamia przepływy na tymczasowej bazie, nie na lokalnej instalacji."""
+    """Run flows against a temporary database, not the local installation."""
     with prefect_test_harness():
         yield
 
@@ -30,7 +30,7 @@ def _labelled_frame(rows: int = 120) -> pd.DataFrame:
 
 
 def test_tasks_are_callable_without_prefect_via_fn() -> None:
-    """`.fn` daje czystą funkcję — logikę testujemy bez silnika przepływów."""
+    """`.fn` gives the plain function, so logic is tested without the engine."""
     frame = _labelled_frame(rows=40)
     X_train, X_test, _y_train, _y_test = split_task.fn(frame, TrainingSettings())
     assert len(X_train) + len(X_test) == len(frame)
@@ -38,16 +38,15 @@ def test_tasks_are_callable_without_prefect_via_fn() -> None:
 
 
 def test_load_task_retries_on_failure() -> None:
-    """Pobranie danych bywa przejściowo zawodne, więc krok ma ponawiać."""
+    """Loading the data can fail transiently, so the step retries."""
     assert load_task.retries >= 1
 
 
 def test_grid_task_cache_key_depends_on_inputs() -> None:
-    """Cache liczony z wartości wejściowych, nie z samego faktu wywołania.
+    """The cache key comes from the input values, not from the call alone.
 
-    Polityka oparta na czymkolwiek innym zwracałaby wynik poprzedniego
-    przebiegu po zmianie danych — trening "przechodziłby" na starym zbiorze
-    i nikt by tego nie zauważył.
+    A policy keyed on anything else would return the previous run's result after
+    the data changed, and training would pass on a stale dataset unnoticed.
     """
     frame_a, _ = synthetic_frame(rows=20, seed=0)
     frame_b, _ = synthetic_frame(rows=20, seed=7)
@@ -66,7 +65,7 @@ def test_grid_task_cache_key_depends_on_inputs() -> None:
 
 
 def test_flow_runs_the_grid_end_to_end(tmp_path: Path) -> None:
-    """Przepływ przechodzi od pliku do tabeli porównawczej."""
+    """The flow runs from file to comparison table."""
     csv = tmp_path / "application_train.csv"
     _labelled_frame().to_csv(csv, index=False)
 
@@ -82,16 +81,16 @@ def test_flow_runs_the_grid_end_to_end(tmp_path: Path) -> None:
 
 
 def test_grid_cache_is_invalidated_by_a_code_change() -> None:
-    """Cache musi widzieć kod zadania, nie tylko dane.
+    """The cache must see the task code, not only the data.
 
-    Sama polityka INPUTS trzyma wynik między przebiegami także wtedy, gdy
-    zmienią się hiperparametry — siatka wróciłaby z metrykami konfiguracji,
-    która już nie istnieje, a champion dopasowałby się do nowej.
+    INPUTS alone keeps the result across runs even after hyperparameters change:
+    the grid would return metrics for a configuration that no longer exists, while
+    the champion fits the new one.
     """
     kinds = {type(policy).__name__ for policy in grid_task.cache_policy.policies}
     assert {"Inputs", "TaskSource"} <= kinds
 
 
 def test_grid_cache_expires() -> None:
-    """Cache bez wygaśnięcia żyje wiecznie w lokalnym magazynie wyników."""
+    """A cache without expiry lives forever in the local result store."""
     assert grid_task.cache_expiration is not None

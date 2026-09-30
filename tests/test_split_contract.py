@@ -1,13 +1,12 @@
-"""Strażnik podziału train/test.
+"""Train/test split guard.
 
-Podział liczymy z RANDOM_STATE, nie przechowujemy listy identyfikatorów.
-`train_test_split` jest jednak funkcją ramki, którą dostanie — jeśli Faza 2
-usunie choć jeden wiersz, podział cicho się przesunie, a porównanie modeli
-z Faz 3 i 4 przestanie być porównaniem. Ten test zamienia cichy dryf w głośną
-porażkę.
+The split is computed from RANDOM_STATE rather than storing a list of ids.
+`train_test_split` is however a function of the frame it receives: if a row is
+removed, the split shifts silently and model comparisons stop being
+comparisons. This test turns that silent drift into a loud failure.
 
-Gdy zmiana podziału jest ZAMIERZONA: uruchom test, przepisz wypisaną sumę
-kontrolną do EXPECTED_TEST_SET_SHA256 i odnotuj powód w findings danej fazy.
+When a split change is intentional: run the test, copy the printed checksum
+into EXPECTED_TEST_SET_SHA256, and record why.
 """
 
 from __future__ import annotations
@@ -23,13 +22,12 @@ from data_loader import DataLoader
 
 pytestmark = pytest.mark.requires_data
 
-# ZMIANA ZAMIERZONA (Faza 2). Higiena wierszy usuwa 4 rekordy
-# `CODE_GENDER == "XNA"` (spec D4), więc `train_test_split` dostaje inną ramkę
-# i podział się przesuwa: 61 503 -> 61 502 wiersze testowe. Ten test wykrył to
-# dokładnie tak, jak zaprojektowano w Fazie 0. Skutek dla porównywalności jest
-# pomijalny — 4 wiersze na 307 511 to 0.0013% zbioru — ale jest odnotowany
-# w `docs/findings/02-eda.md`, bo baseline 0.7479 z Fazy 1 zmierzono na
-# minimalnie innym zbiorze testowym.
+# INTENTIONAL CHANGE. Row hygiene removes 4 records with
+# `CODE_GENDER == "XNA"`, so `train_test_split` receives a different frame
+# and the split shifts: 61,503 -> 61,502 test rows. This test caught it
+# exactly as designed. The effect on comparability is negligible, 4 rows in
+# 307,511 or 0.0013%, but the earlier 0.7479 baseline was measured on the
+# previous split.
 EXPECTED_TEST_SET_SHA256 = (
     "d6fe6da52b849bf449b1eddfe70176c43ff9cc9a8624540884a24e0a5158d895"
 )
@@ -37,10 +35,10 @@ EXPECTED_TEST_ROWS = 61_502
 
 
 def _checksum(ids: pd.Series) -> str:
-    """SHA-256 po posortowanych identyfikatorach, złączonych przecinkami.
+    """SHA-256 over the sorted identifiers, joined by commas.
 
-    Nie `hash()`: wbudowany hash Pythona jest solony per proces (PYTHONHASHSEED),
-    więc dawałby inny wynik przy każdym uruchomieniu.
+    Not `hash()`: Python's built-in hash is salted per process
+    (PYTHONHASHSEED), so it would differ on every run.
     """
     joined = ",".join(str(i) for i in sorted(ids.tolist()))
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()
@@ -51,9 +49,9 @@ def test_test_split_has_not_drifted() -> None:
     _X_train, X_test, _y_train, _y_test = DataLoader().split(df)
     actual = _checksum(df.loc[X_test.index, ID_COLUMN])
     assert actual == EXPECTED_TEST_SET_SHA256, (
-        f"Podział testowy się zmienił. Nowa suma: {actual}\n"
-        "Jeśli to zamierzone, wpisz ją do EXPECTED_TEST_SET_SHA256 "
-        "i opisz powód w findings tej fazy."
+        f"The test split changed. New checksum: {actual}\n"
+        "If this is intentional, write it into EXPECTED_TEST_SET_SHA256 "
+        "and record why."
     )
 
 

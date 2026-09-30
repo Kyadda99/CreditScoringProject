@@ -8,30 +8,29 @@ version = "0.0.0"
 description = "Credit default scoring, end-to-end: data -> model -> service -> cloud"
 readme = "README.md"
 requires-python = ">=3.12"
-# Wyłącznie to, czego potrzebuje SERWOWANIE — każda pozycja tutaj ląduje
-# w obrazie kontenera. mlflow i kagglehub siedzą w grupie `training` niżej:
-# dorzucone do obrazu podniosły go z ~520 MB do 1.28 GB, a serwis ich nie używa.
+# Only what serving needs; every entry here ships in the container image.
+# mlflow and kagglehub sit in the `training` group below: adding them took the
+# image from ~520 MB to 1.28 GB, and the service does not use them.
 dependencies = [
     "pandas>=2.2",
-    # kagglehub czyta poświadczenia ze środowiska, ale nie z `.env`.
-    # pydantic-settings w Fazie 1 i tak ciągnie tę bibliotekę pod spodem.
+    # kagglehub reads credentials from the environment but not from `.env`.
+    # pydantic-settings pulls this library in anyway.
     "python-dotenv>=1.0",
     "scikit-learn>=1.5",
     "joblib>=1.4",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "pydantic-settings>=2.4",
-    # RUNTIME, choć api/app.py nigdy go nie importuje: championem Fazy 3 jest
-    # XGBClassifier, więc joblib ładuje xgboost.sklearn przy odpakowywaniu
-    # artefaktu. Bez tego kontener wstaje i pada dopiero w `lifespan`.
-    # Gdyby champion kiedyś przestał być XGBoostem, ta pozycja wraca do grupy
-    # `training` — obraz ma płacić wyłącznie za to, co faktycznie wozi.
+    # Runtime, even though api/app.py never imports it: the champion is an
+    # XGBClassifier, so joblib loads xgboost.sklearn when unpickling the
+    # artifact. Without it the container starts and then fails in `lifespan`.
+    # If the champion stops being XGBoost, this moves back to `training`.
     "xgboost>=3.4.1",
 ]
 
 [project.scripts]
-# Uruchamialne polecenia, zgodnie z CLAUDE.md: cienki `main()` w module
-# pod src/, wywoływany przez `uv run <nazwa>`.
+# Runnable commands: a thin `main()` in a module under src/, invoked by
+# `uv run <name>`.
 cs-download = "download_data:main"
 cs-train = "train:cli"
 cs-tune = "tune:cli"
@@ -51,8 +50,8 @@ dev = [
     "pytest-cov>=7.1.0",
 ]
 
-# Potrzebne wyłącznie offline: trening i pobieranie danych. Obraz kontenera
-# instaluje się przez `uv sync --no-default-groups`, więc tego nie dostaje.
+# Needed offline only: training and downloading data. The container image
+# installs with `uv sync --no-default-groups`, so it does not get these.
 training = [
     "mlflow>=2.16",
     "kagglehub>=1.0.1",
@@ -62,40 +61,37 @@ training = [
     "prefect>=3.8.7",
 ]
 
-# Lokalnie chcemy komplet: dev do testów, training do `cs-train` i `cs-download`.
-# Obraz kontenera świadomie omija oba.
+# Locally we want both: dev for tests, training for cs-train and cs-download.
+# The container image deliberately skips both.
 [tool.uv]
 default-groups = ["dev", "training"]
-# XGBoost na Linuksie ciągnie `nvidia-nccl-cu13` — 288 MB bibliotek CUDA do
-# komunikacji zbiorowej między GPU. Serwis scoringowy liczy JEDEN wiersz na
-# CPU i nigdy nie zobaczy karty graficznej, więc to czysty balast: obraz rósł
-# przez to z 700 MB do 1.4 GB. Marker `sys_platform == 'never'` nie pasuje do
-# żadnej platformy, więc pakiet nie instaluje się nigdzie.
+# On Linux XGBoost pulls in `nvidia-nccl-cu13`, 288 MB of CUDA libraries for
+# collective communication between GPUs. The scoring service handles one row on
+# CPU and never sees a GPU, and the image grew from 700 MB to 1.4 GB because of
+# it. The marker `sys_platform == 'never'` matches no platform, so the package
+# installs nowhere.
 #
-# Gdyby Faza 4 chciała trenować XGBoosta na GPU, ten override trzeba zdjąć
-# — ale wtedy i tak wraca do grupy `training`, nie do obrazu.
+# Training XGBoost on a GPU would require removing this override.
 override-dependencies = ["nvidia-nccl-cu13; sys_platform == 'never'"]
 
 # Flat modules live directly under src/ and are imported by bare name
 # (`from config import TARGET`). Add one entry here per module as each
 # phase introduces it.
 #
-# WARNING (verified 2026-09-04, setuptools 80.x): a name listed here that is
-# NOT on disk is **silently skipped** — the build still succeeds. An earlier
-# version of this comment claimed the opposite. So this list does not police
-# itself: delete a module and the wheel just quietly loses it, exactly the
-# kind of silent drift that bit us in Phase 1 (M1/M4). The real guard is
+# Verified with setuptools 80.x: a name listed here that is not on disk is
+# silently skipped and the build still succeeds. This list does not police
+# itself; delete a module and the wheel quietly loses it. The real guard is
 # tests/test_api.py importing through the installed package.
 [tool.setuptools]
 py-modules = ["config", "data", "download_data", "preprocessing", "strategies", "preprocessor", "data_loader", "trainer", "predictor", "settings", "flows", "evaluation", "artifact", "train", "eda", "quality_gate", "registry", "tune"]
 
-# Sub-packages under src/ (api/, features/, nn/) arrive in later phases.
+# Sub-packages under src/, such as api/ and features/.
 [tool.setuptools.packages.find]
 where = ["src"]
 
-# feature_schema.json jest generowany przez trening i commitowany. Musi trafić
-# do zainstalowanego pakietu, bo api/schemas.py czyta go przy imporcie — inaczej
-# obraz kontenera wstaje bez kontraktu cech.
+# feature_schema.json is generated by training and committed. It must reach the
+# installed package because api/schemas.py reads it at import; otherwise the
+# container image starts without a feature contract.
 [tool.setuptools.package-data]
 api = ["feature_schema.json"]
 

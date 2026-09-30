@@ -1,9 +1,8 @@
-"""Wymienne warianty estymatora i obsługi niezbalansowania.
+"""Interchangeable estimator and imbalance-handling variants.
 
-Dwie osie zmienności zmierzone w siatce porównawczej: rodzina estymatora oraz
-sposób radzenia sobie z rzadką klasą. Wagi klas ustawia się inaczej
-w scikit-learn niż w XGBoost, więc wie o tym sama rodzina estymatora, a nie
-warunek w kodzie wywołującym.
+The two axes the comparison grid varies: estimator family and how the rare
+class is handled. Class weighting is expressed differently in scikit-learn and
+XGBoost, so each estimator family knows its own form rather than the caller.
 """
 
 from __future__ import annotations
@@ -21,41 +20,41 @@ from config import RANDOM_STATE
 
 
 class EstimatorStrategy(ABC):
-    """Rodzina estymatora.
+    """Estimator family.
 
-    Kontrakt: `build` zwraca **nowy, niedopasowany** estymator przy każdym
-    wywołaniu i sam decyduje, jak wyrazić ważenie klas w swoim API.
+    Contract: `build` returns a new, unfitted estimator on every call and
+    decides how to express class weighting in its own API.
 
     Attributes:
-        name: Klucz w `ESTIMATOR_STRATEGIES`, używany w tabeli porównawczej.
+        name: Key in `ESTIMATOR_STRATEGIES`, used in the comparison table.
     """
 
     name: str
 
     @abstractmethod
     def build(self, *, class_weighted: bool, scale_pos_weight: float) -> BaseEstimator:
-        """Tworzy estymator.
+        """Create the estimator.
 
         Args:
-            class_weighted: Czy rzadka klasa ma dostać wyższą wagę.
-            scale_pos_weight: Stosunek negatywów do pozytywów; istotny tylko
-                dla rodzin, które wyrażają wagi liczbą.
+            class_weighted: Whether the rare class gets a higher weight.
+            scale_pos_weight: Ratio of negatives to positives; relevant only
+                for families that express weights as a number.
 
         Returns:
-            Niedopasowany estymator.
+            An unfitted estimator.
         """
 
 
 class ImbalanceStrategy(ABC):
-    """Sposób radzenia sobie z niezbalansowaniem klas.
+    """How class imbalance is handled.
 
-    Kontrakt: ramię albo prosi estymator o wagi (`uses_class_weights`), albo
-    dokłada sampler (`make_sampler`), nigdy oba naraz — inaczej ten sam
-    imbalans zostałby policzony dwa razy.
+    Contract: an arm either asks the estimator for weights
+    (`uses_class_weights`) or adds a sampler (`make_sampler`), never both, or
+    the same imbalance would be counted twice.
 
     Attributes:
-        name: Klucz w `IMBALANCE_STRATEGIES`.
-        uses_class_weights: Czy estymator ma dostać `class_weighted=True`.
+        name: Key in `IMBALANCE_STRATEGIES`.
+        uses_class_weights: Whether the estimator gets `class_weighted=True`.
     """
 
     name: str
@@ -63,18 +62,18 @@ class ImbalanceStrategy(ABC):
 
     @abstractmethod
     def make_sampler(self) -> BaseEstimator | None:
-        """Zwraca świeży sampler albo `None`, gdy ramię go nie używa."""
+        """Return a fresh sampler, or `None` when the arm uses none."""
 
 
 @dataclass(frozen=True)
 class LogisticRegressionStrategy(EstimatorStrategy):
-    """Regresja logistyczna — punkt odniesienia całego projektu."""
+    """Logistic regression: the project baseline."""
 
     name: str = "logistic_regression"
 
     def build(self, *, class_weighted: bool, scale_pos_weight: float) -> BaseEstimator:
-        """Tworzy regresję logistyczną. Patrz `EstimatorStrategy.build`."""
-        # max_iter=1000: po one-hot mamy 211 kolumn, a lbfgs nie zbiega w 100.
+        """Create the logistic regression. See `EstimatorStrategy.build`."""
+        # max_iter=1000: one-hot gives 211 columns and lbfgs does not converge in 100.
         return LogisticRegression(
             max_iter=1000,
             random_state=RANDOM_STATE,
@@ -84,14 +83,14 @@ class LogisticRegressionStrategy(EstimatorStrategy):
 
 @dataclass(frozen=True)
 class RandomForestStrategy(EstimatorStrategy):
-    """Las losowy z ograniczoną głębokością."""
+    """Random forest with bounded depth."""
 
     name: str = "random_forest"
 
     def build(self, *, class_weighted: bool, scale_pos_weight: float) -> BaseEstimator:
-        """Tworzy las losowy. Patrz `EstimatorStrategy.build`."""
-        # Ograniczenia głębokości i liścia: bez nich las na 246k wierszach
-        # trenuje się długo, waży setki MB i przeucza na szumie rzadkiej klasy.
+        """Create the random forest. See `EstimatorStrategy.build`."""
+        # Depth and leaf limits: without them the forest on 246k rows trains
+        # slowly, weighs hundreds of MB and overfits rare-class noise.
         return RandomForestClassifier(
             n_estimators=200,
             max_depth=12,
@@ -104,15 +103,14 @@ class RandomForestStrategy(EstimatorStrategy):
 
 @dataclass(frozen=True)
 class XGBoostStrategy(EstimatorStrategy):
-    """Gradient boosting; wagi klas wyraża liczbą, nie etykietą."""
+    """Gradient boosting; expresses class weights as a number, not a label."""
 
     name: str = "xgboost"
 
     def build(self, *, class_weighted: bool, scale_pos_weight: float) -> BaseEstimator:
-        """Tworzy XGBoosta. Patrz `EstimatorStrategy.build`."""
-        # tree_method="hist": splity po histogramie, wielokrotnie szybsze na
-        # 246k x 211. eval_metric="aucpr" spina metrykę wewnętrzną z tą,
-        # którą wybieramy championa.
+        """Create the XGBoost model. See `EstimatorStrategy.build`."""
+        # tree_method="hist": histogram splits, much faster on 246k x 211.
+        # eval_metric="aucpr" matches the metric used to pick the champion.
         return XGBClassifier(
             n_estimators=300,
             max_depth=5,
@@ -127,38 +125,38 @@ class XGBoostStrategy(EstimatorStrategy):
 
 @dataclass(frozen=True)
 class NoImbalanceHandling(ImbalanceStrategy):
-    """Brak jakiejkolwiek korekty — model widzi rozkład, jaki jest."""
+    """No correction: the model sees the distribution as it is."""
 
     name: str = "none"
     uses_class_weights: bool = False
 
     def make_sampler(self) -> BaseEstimator | None:
-        """Nie używa samplera."""
+        """Uses no sampler."""
         return None
 
 
 @dataclass(frozen=True)
 class ClassWeighting(ImbalanceStrategy):
-    """Wyższa waga rzadkiej klasy, wyrażona w API estymatora."""
+    """Higher weight for the rare class, expressed in the estimator API."""
 
     name: str = "class_weight"
     uses_class_weights: bool = True
 
     def make_sampler(self) -> BaseEstimator | None:
-        """Nie używa samplera."""
+        """Uses no sampler."""
         return None
 
 
 @dataclass(frozen=True)
 class Resampling(ImbalanceStrategy):
-    """Syntetyczne przykłady rzadkiej klasy (SMOTE)."""
+    """Synthetic rare-class examples (SMOTE)."""
 
     name: str = "resample"
     uses_class_weights: bool = False
 
     def make_sampler(self) -> BaseEstimator | None:
-        """Zwraca świeży SMOTE."""
-        # Bez n_jobs: parametr usunięty z SMOTE w imbalanced-learn 0.12.
+        """Return a fresh SMOTE."""
+        # No n_jobs: the parameter was removed from SMOTE in imbalanced-learn 0.12.
         return SMOTE(random_state=RANDOM_STATE)
 
 
@@ -170,51 +168,49 @@ ESTIMATOR_STRATEGIES: dict[str, EstimatorStrategy] = {
         XGBoostStrategy(),
     )
 }
-"""Nazwa algorytmu -> strategia. Nowy algorytm dopisuje wpis, nie warunek."""
+"""Algorithm name -> strategy. A new algorithm adds an entry, not a branch."""
 
 IMBALANCE_STRATEGIES: dict[str, ImbalanceStrategy] = {
     s.name: s for s in (NoImbalanceHandling(), ClassWeighting(), Resampling())
 }
-"""Nazwa ramienia -> strategia."""
+"""Arm name -> strategy."""
 
 
 def get_estimator_strategy(name: str) -> EstimatorStrategy:
-    """Zwraca strategię estymatora po nazwie.
+    """Return the estimator strategy with the given name.
 
     Args:
-        name: Klucz z `ESTIMATOR_STRATEGIES`.
+        name: Key from `ESTIMATOR_STRATEGIES`.
 
     Returns:
-        Strategia estymatora.
+        The estimator strategy.
 
     Raises:
-        ValueError: Gdy nazwa jest nieznana.
+        ValueError: When the name is unknown.
     """
     try:
         return ESTIMATOR_STRATEGIES[name]
     except KeyError:
         allowed = ", ".join(sorted(ESTIMATOR_STRATEGIES))
-        raise ValueError(
-            f"Nieznany estymator: {name!r}. Dozwolone: {allowed}."
-        ) from None
+        raise ValueError(f"Unknown estimator: {name!r}. Allowed: {allowed}.") from None
 
 
 def get_imbalance_strategy(name: str) -> ImbalanceStrategy:
-    """Zwraca strategię niezbalansowania po nazwie.
+    """Return the imbalance strategy with the given name.
 
     Args:
-        name: Klucz z `IMBALANCE_STRATEGIES`.
+        name: Key from `IMBALANCE_STRATEGIES`.
 
     Returns:
-        Strategia niezbalansowania.
+        The imbalance strategy.
 
     Raises:
-        ValueError: Gdy nazwa jest nieznana.
+        ValueError: When the name is unknown.
     """
     try:
         return IMBALANCE_STRATEGIES[name]
     except KeyError:
         allowed = ", ".join(sorted(IMBALANCE_STRATEGIES))
         raise ValueError(
-            f"Nieznane ramię niezbalansowania: {name!r}. Dozwolone: {allowed}."
+            f"Unknown imbalance arm: {name!r}. Allowed: {allowed}."
         ) from None

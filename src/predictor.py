@@ -1,4 +1,4 @@
-"""Ocena pojedynczego wniosku na podstawie zapisanego artefaktu."""
+"""Scoring a single application from a saved artifact."""
 
 from __future__ import annotations
 
@@ -12,14 +12,14 @@ from artifact import Bundle
 from config import FeatureGroups
 
 FALLBACK_THRESHOLD = 0.5
-"""Próg stosowany, gdy nie ma go ani w konfiguracji, ani w artefakcie."""
+"""Threshold used when neither the configuration nor the artifact has one."""
 
 
 class ThresholdSettings(Protocol):
-    """Konfiguracja niosąca jawny próg albo jego brak.
+    """Configuration carrying an explicit threshold, or none.
 
-    Protokół zamiast importu `api.config`: predyktor jest warstwą niżej niż
-    serwis HTTP i nie może od niego zależeć.
+    A protocol rather than an import of `api.config`: the predictor sits below
+    the HTTP service and must not depend on it.
     """
 
     score_threshold: float | None
@@ -27,12 +27,12 @@ class ThresholdSettings(Protocol):
 
 @dataclass(frozen=True)
 class ScoreResult:
-    """Wynik oceny jednego wniosku.
+    """Result of scoring one application.
 
     Attributes:
-        probability: Prawdopodobieństwo trudności ze spłatą.
-        decision: Czy prawdopodobieństwo osiągnęło próg.
-        threshold: Próg, który wyprodukował decyzję.
+        probability: Probability of repayment difficulty.
+        decision: Whether the probability reached the threshold.
+        threshold: Threshold that produced the decision.
     """
 
     probability: float
@@ -41,33 +41,33 @@ class ScoreResult:
 
 
 class Predictor:
-    """Ocenia wnioski wytrenowanym potokiem.
+    """Scores applications with a trained pipeline.
 
     Attributes:
-        bundle: Artefakt z potokiem i kontraktami kolumn.
-        threshold: Próg decyzyjny zastosowany do prawdopodobieństwa.
+        bundle: Artifact holding the pipeline and both column contracts.
+        threshold: Decision threshold applied to the probability.
     """
 
     def __init__(self, bundle: Bundle, threshold: float) -> None:
-        """Przyjmuje gotowy artefakt i próg.
+        """Take a loaded artifact and a threshold.
 
         Args:
-            bundle: Wczytany artefakt.
-            threshold: Próg decyzyjny.
+            bundle: Loaded artifact.
+            threshold: Decision threshold.
         """
         self.bundle = bundle
         self.threshold = threshold
 
     @classmethod
     def from_bundle(cls, bundle: Bundle, threshold: float | None = None) -> Predictor:
-        """Tworzy predyktor, biorąc próg z artefaktu, gdy nie podano innego.
+        """Build a predictor, taking the threshold from the artifact if absent.
 
         Args:
-            bundle: Wczytany artefakt.
-            threshold: Jawny próg; `None` oznacza próg zapisany w metadanych.
+            bundle: Loaded artifact.
+            threshold: Explicit threshold; `None` uses the stored metadata.
 
         Returns:
-            Gotowy predyktor.
+            A ready predictor.
         """
         if threshold is None:
             threshold = float(bundle.metadata.get("threshold", FALLBACK_THRESHOLD))
@@ -75,57 +75,57 @@ class Predictor:
 
     @classmethod
     def from_settings(cls, settings: ThresholdSettings, bundle: Bundle) -> Predictor:
-        """Buduje predyktor; jawny próg z konfiguracji ma pierwszeństwo.
+        """Build a predictor; an explicit configured threshold wins.
 
         Args:
-            settings: Ustawienia serwisu.
-            bundle: Wczytany artefakt.
+            settings: Service settings.
+            bundle: Loaded artifact.
 
         Returns:
-            Predyktor z progiem z konfiguracji, a w jego braku z artefaktu,
-            a w braku obu z wartości domyślnej.
+            A predictor using the configured threshold, else the artifact's,
+            else the fallback.
         """
         return cls.from_bundle(bundle, settings.score_threshold)
 
     @property
     def input_groups(self) -> FeatureGroups:
-        """Kontrakt wejściowy: surowe kolumny przyjmowane od klienta."""
+        """Input contract: the raw columns accepted from the client."""
         return self.bundle.input_groups
 
     def to_frame(self, payload: dict[str, Any]) -> pd.DataFrame:
-        """Zamienia ciało żądania na jednowierszową ramkę surowych kolumn.
+        """Turn the request body into a one-row frame of raw columns.
 
-        Buduje wiersz z kontraktu **wejściowego**, nie z grup modelu: model
-        konsumuje cechy pochodne, których klient nie przysyła — liczy je
-        pierwszy krok potoku.
+        Builds the row from the input contract, not the model groups: the model
+        consumes derived features the client does not send, and the first
+        pipeline step computes them.
 
         Args:
-            payload: Zwalidowane pola żądania, bez pustych.
+            payload: Validated request fields, with empties removed.
 
         Returns:
-            Ramka o jednym wierszu i kolumnach kontraktu wejściowego.
+            A one-row frame with the input contract's columns.
         """
         return self.build_frame(payload, self.input_groups)
 
     @staticmethod
     def build_frame(payload: dict[str, Any], groups: FeatureGroups) -> pd.DataFrame:
-        """Buduje jednowierszową ramkę dla wskazanych grup kolumn.
+        """Build a one-row frame for the given column groups.
 
-        Kolejność kolumn bierzemy z kontraktu, a nie z żądania: kolejność
-        kluczy w JSON-ie jest przypadkowa.
+        Column order comes from the contract, not the request: JSON key order
+        is arbitrary.
 
         Args:
-            payload: Zwalidowane pola żądania, bez pustych.
-            groups: Grupy kolumn, z których budujemy wiersz.
+            payload: Validated request fields, with empties removed.
+            groups: Column groups the row is built from.
 
         Returns:
-            Ramka o jednym wierszu i kolumnach `groups.all_features`.
+            A one-row frame with the columns of `groups.all_features`.
         """
         row = {name: payload.get(name) for name in groups.all_features}
         frame = pd.DataFrame([row], columns=list(groups.all_features))
 
-        # Bez rzutowania ramka ma dtype object, a wtedy SimpleImputer nie
-        # rozpoznaje None jako braku i flagi binarne docierają do modelu jako NaN.
+        # Without the cast the frame is object dtype, SimpleImputer does not
+        # recognise None as missing, and binary flags reach the model as NaN.
         numeric_like = [*groups.numeric, *groups.binary]
         if numeric_like:
             frame[numeric_like] = frame[numeric_like].astype("float64")
@@ -139,16 +139,16 @@ class Predictor:
         return frame
 
     def score(self, payload: dict[str, Any]) -> ScoreResult:
-        """Ocenia jeden wniosek.
+        """Score one application.
 
         Args:
-            payload: Zwalidowane pola żądania.
+            payload: Validated request fields.
 
         Returns:
-            Prawdopodobieństwo, decyzja i próg.
+            The probability, the decision and the threshold.
 
         Raises:
-            ValueError: Gdy wartości cech są niepoprawne dla potoku.
+            ValueError: When the feature values are invalid for the pipeline.
         """
         frame = self.to_frame(payload)
         probability = float(self.bundle.pipeline.predict_proba(frame)[0, 1])

@@ -1,4 +1,4 @@
-"""Konfiguracja serwisu scoringowego, czytana ze środowiska i `.env`."""
+"""Scoring service configuration, read from the environment and .env."""
 
 from __future__ import annotations
 
@@ -12,20 +12,16 @@ from artifact import DEFAULT_ARTIFACT_PATH
 
 
 class Settings(BaseSettings):
-    """Ustawienia serwisu. Każde pole ma wartość domyślną, więc `.env` jest opcjonalny.
+    """Service settings. Every field has a default, so .env is optional.
 
     Attributes:
-        model_path: Ścieżka do artefaktu joblib ładowanego przy starcie.
-        score_threshold: Nadpisanie progu decyzyjnego. `None` (domyślnie)
-            oznacza "weź próg z artefaktu" — metryki zapisane przy treningu
-            opisują decyzję podjętą przy TAMTYM progu, więc serwis ma stosować
-            tę samą regułę, którą zmierzono. Ustaw jawnie tylko po to, żeby
-            świadomie odejść od wartości z artefaktu.
+        model_path: Path to the joblib artifact loaded at startup.
+        score_threshold: Decision threshold override. `None` (the default)
+            means take the threshold from the artifact.
     """
 
-    # protected_namespaces=(): pydantic domyślnie rezerwuje przedrostek `model_`
-    # dla własnych atrybutów i ostrzega przy `model_path`. Nazwa jest tu
-    # właściwa, więc wyłączamy ochronę zamiast zmieniać nazwę pola.
+    # protected_namespaces=(): pydantic reserves the `model_` prefix and would
+    # otherwise warn about `model_path`.
     model_config = SettingsConfigDict(
         env_file=".env",
         env_prefix="CS_",
@@ -39,5 +35,5 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    """Zwraca ustawienia, tworzone raz na proces."""
+    """Return the settings, built once per process."""
     return Settings()

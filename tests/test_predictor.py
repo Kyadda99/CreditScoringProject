@@ -1,4 +1,4 @@
-"""Kontrakt Predictora: wiersz żądania, prawdopodobieństwo, decyzja."""
+"""Predictor contract: request row, probability, decision."""
 
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ def test_from_bundle_takes_the_threshold_from_metadata(
 
 
 def test_predictor_does_not_depend_on_the_api_package() -> None:
-    """Zależności idą w jedną stronę: api zna Predictora, nie odwrotnie."""
+    """Dependencies run one way: api knows Predictor, not the reverse."""
     import predictor as predictor_module
 
     source = Path(predictor_module.__file__).read_text(encoding="utf-8")

@@ -1,4 +1,4 @@
-"""Wejście CLI treningu: konfiguracja i metadane artefaktu."""
+"""Training CLI entry point: configuration and artifact metadata."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from settings import TrainingSettings
 
 
 def test_cli_defaults_come_from_training_settings() -> None:
-    """Zmienne CS_* mają realnie sterować treningiem, a nie być ozdobą."""
+    """CS_* variables must actually drive training, not just exist."""
     from train import build_parser
 
     settings = TrainingSettings(models=("xgboost",), arms=("none",))
@@ -18,7 +18,7 @@ def test_cli_defaults_come_from_training_settings() -> None:
 
 
 def test_champion_metadata_records_the_split_that_was_actually_used() -> None:
-    """Metadane opisują przebieg, więc muszą brać wartości z loadera."""
+    """Metadata describes the run, so it must take values from the loader."""
     from data_loader import DataLoader
     from train import champion_metadata
 
@@ -39,7 +39,7 @@ def test_champion_metadata_records_the_split_that_was_actually_used() -> None:
 
 
 def test_engineered_flag_defaults_to_the_setting() -> None:
-    """`--no-engineered` ma działać, a CS_ENGINEERED ma nie być nadpisywane."""
+    """`--no-engineered` must work, and CS_ENGINEERED must not be overwritten."""
     from train import build_parser
 
     off = build_parser(TrainingSettings(engineered=False))

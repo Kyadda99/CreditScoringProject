@@ -1,4 +1,4 @@
-"""Testy cech pochodnych — wartości liczone ręcznie plus przypadki brzegowe."""
+"""Derived feature tests: hand-computed values plus edge cases."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from features.ratios import (
 
 @pytest.fixture
 def row() -> pd.DataFrame:
-    """Jeden wiersz z przykładu w `api/schemas.EXAMPLES`."""
+    """One row from the example in `api/schemas.EXAMPLES`."""
     return pd.DataFrame(
         {
             "AMT_INCOME_TOTAL": [202500.0],
@@ -36,7 +36,7 @@ def row() -> pd.DataFrame:
     )
 
 
-# --- T1: wartości liczone ręcznie ------------------------------------------
+# --- Hand-computed values ---
 
 
 def test_credit_income_ratio(row: pd.DataFrame) -> None:
@@ -78,7 +78,7 @@ def test_bureau_inquiry_total_sums_the_six_columns() -> None:
 
 
 def test_bureau_inquiry_total_is_nan_when_all_six_are_missing() -> None:
-    """Suma samych braków to brak, nie zero — inaczej "nie wiem" udaje "zero"."""
+    """A sum of all-missing is missing, not zero, or "unknown" poses as "zero"."""
     frame = pd.DataFrame({"AMT_REQ_CREDIT_BUREAU_DAY": [np.nan]}, index=[0])
     assert np.isnan(bureau_inquiry_total(frame).iloc[0])
 
@@ -97,7 +97,7 @@ def test_ext_source_count_counts_present_values() -> None:
     assert ext_source_count(frame).iloc[0] == pytest.approx(2.0)
 
 
-# --- T2: przypadki brzegowe ------------------------------------------------
+# --- Edge cases ---
 
 
 @pytest.mark.parametrize(
@@ -115,7 +115,7 @@ def test_zero_family_members_gives_nan() -> None:
 
 
 def test_employed_age_ratio_handles_the_sentinel() -> None:
-    """Iloraz liczy się na DAYS_EMPLOYED po dekodowaniu, nie na surowej wartości."""
+    """The ratio uses DAYS_EMPLOYED after decoding, not the raw value."""
     frame = pd.DataFrame({"DAYS_EMPLOYED": [365243.0], "DAYS_BIRTH": [-9461.0]})
     assert np.isnan(employed_age_ratio(frame).iloc[0])
 
@@ -127,11 +127,11 @@ def test_every_function_survives_a_completely_empty_frame() -> None:
         assert len(result) == 1, name
 
 
-# --- T3: reguła D5, jako własność ------------------------------------------
+# --- The no-infinity rule, as a property ---
 
 
 def test_no_engineered_column_is_ever_infinite() -> None:
-    """Spec D5. Ramka jest zbudowana tak, żeby sprowokować dzielenie przez zero."""
+    """The frame is built to provoke division by zero."""
     provocative = pd.DataFrame(
         {
             "AMT_INCOME_TOTAL": [0.0, np.nan, 1e-300, 202500.0],
@@ -145,4 +145,4 @@ def test_no_engineered_column_is_ever_infinite() -> None:
     )
     for name, function in RATIO_FUNCTIONS.items():
         values = function(provocative).to_numpy(dtype="float64")
-        assert not np.isinf(values).any(), f"{name} wyprodukowało ±inf"
+        assert not np.isinf(values).any(), f"{name} produced +/-inf"

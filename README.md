@@ -1,31 +1,32 @@
 # Credit Scoring
 
-Scoring ryzyka niespłacenia kredytu, prowadzony end-to-end: dane → model →
-usługa HTTP → kontener → chmura. Zbiór: [Home Credit Default
+End-to-end credit default risk scoring: data to model to HTTP service to
+container to cloud. Dataset: [Home Credit Default
 Risk](https://www.kaggle.com/competitions/home-credit-default-risk)
 (`application_train.csv`).
 
-Dokumentacja robocza (`PLAN.md`, `CLAUDE.md`, `docs/`) jest trzymana lokalnie
-i celowo nieśledzona przez git — plan faz, konwencje kodu i wnioski z kolejnych
-etapów nie wchodzą do repozytorium.
+Working documentation is kept locally and deliberately untracked, so the
+implementation notes and conventions stay out of the repository.
 
-## Szybki start
+## Quick start
 
 ```bash
-uv sync                      # odtwarza środowisko z uv.lock
-uv run python verify_env.py  # wersje bibliotek, GPU, obecność danych
-uv run cs-download           # pobiera application_train.csv do data/raw/
-uv run pytest                # testy jednostkowe + kontrakt danych
+uv sync                      # restore the environment from uv.lock
+uv run python verify_env.py  # library versions, GPU, whether the data is present
+uv run cs-download           # download application_train.csv into data/raw/
+uv run pytest                # unit tests plus the data contract
 ```
 
-`uv run cs-download` wymaga poświadczeń Kaggle (`~/.kaggle/kaggle.json`) **oraz**
-zaakceptowanego w przeglądarce [regulaminu
-konkursu](https://www.kaggle.com/competitions/home-credit-default-risk/rules) —
-bez tego drugiego API zwraca 403 mimo poprawnych kluczy.
+`uv run cs-download` needs Kaggle credentials (`~/.kaggle/kaggle.json`) **and**
+the [competition
+rules](https://www.kaggle.com/competitions/home-credit-default-risk/rules)
+accepted in a browser; without the second, the API returns 403 even with valid
+keys.
 
-Bez danych testy kontraktu (`requires_data`) pomijają się same, więc `uv run
-pytest` przechodzi też na czystym klonie i w CI.
+Without the data, the contract tests (`requires_data`) skip themselves, so
+`uv run pytest` also passes on a fresh clone and in CI.
 
-## Stan
+## Status
 
-Faza 0 (fundament) — w toku.
+Data analysis, modelling and the scoring service are in place. The training
+path is being refactored into classes with an orchestrated flow.

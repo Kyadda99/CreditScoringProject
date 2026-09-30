@@ -1,4 +1,4 @@
-"""Konfiguracja strony treningowej, czytana ze środowiska i `.env`."""
+"""Training-side configuration, read from the environment and .env."""
 
 from __future__ import annotations
 
@@ -12,16 +12,16 @@ from strategies import ESTIMATOR_STRATEGIES, IMBALANCE_STRATEGIES
 
 
 class TrainingSettings(BaseSettings):
-    """Parametry treningu. Każde pole ma wartość domyślną.
+    """Training parameters. Every field has a default.
 
     Attributes:
-        data_path: Ścieżka do zbioru treningowego.
-        test_size: Udział zbioru testowego.
-        cv_splits: Liczba foldów przy wyznaczaniu progu.
-        models: Algorytmy w siatce.
-        arms: Ramiona niezbalansowania w siatce.
-        engineered: Czy liczyć cechy pochodne.
-        track: Czy zapisywać biegi do MLflow.
+        data_path: Path to the training set.
+        test_size: Test set fraction.
+        cv_splits: Number of folds used to choose the threshold.
+        models: Algorithms in the grid.
+        arms: Imbalance arms in the grid.
+        engineered: Whether to compute derived features.
+        track: Whether to record runs in MLflow.
     """
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="CS_", extra="ignore")
@@ -37,5 +37,5 @@ class TrainingSettings(BaseSettings):
 
 @lru_cache
 def get_training_settings() -> TrainingSettings:
-    """Zwraca ustawienia treningu, tworzone raz na proces."""
+    """Return the training settings, built once per process."""
     return TrainingSettings()

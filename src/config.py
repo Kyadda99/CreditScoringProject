@@ -1,10 +1,7 @@
-"""Stałe projektu i kontrakt kolumn.
+"""Project constants and the column contract.
 
-Ten moduł jest importowalny **bez** obecności danych na dysku — CI nie ma
-poświadczeń Kaggle i nie pobiera 160 MB. Dlatego podział na grupy cech jest
-funkcją liczoną z ramki danych, a nie listą 122 nazw wpisaną ręcznie: nazwy
-kolumn zmieniłyby się razem z danymi, a wyprowadzenie z dtypes nie może się
-rozjechać.
+The module imports without any data on disk. Feature groups are derived from
+dtypes rather than hard-coded, so they cannot drift from the data.
 """
 
 from __future__ import annotations
@@ -14,59 +11,54 @@ from pathlib import Path
 
 import pandas as pd
 
-# --- Ścieżki ---------------------------------------------------------------
+# --- Paths -----------------------------------------------------------------
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 DATA_DIR: Path = PROJECT_ROOT / "data"
 RAW_DATA_DIR: Path = DATA_DIR / "raw"
 DATA_PATH: Path = RAW_DATA_DIR / "application_train.csv"
 
-# --- Kontrakt kolumn -------------------------------------------------------
+# --- Column contract -------------------------------------------------------
 
 TARGET: str = "TARGET"
-"""Zmienna celu: 1 = klient miał trudności ze spłatą, 0 = spłacał terminowo."""
+"""Target: 1 = the client had repayment difficulty, 0 = repaid on time."""
 
 ID_COLUMN: str = "SK_ID_CURR"
-"""Identyfikator wniosku. Nigdy nie jest cechą — unikalny na wiersz."""
+"""Application id. Never a feature; unique per row."""
 
 RANDOM_STATE: int = 42
-"""Jedno ziarno dla całego projektu (split, samplery, modele)."""
+"""One seed for the whole project: split, samplers, models."""
 
 BINARY_VALUES: frozenset[float] = frozenset({0.0, 1.0})
-"""Wartości, jakie może przyjmować kolumna liczbowa uznana za flagę 0/1."""
+"""Values a numeric column may hold to count as a 0/1 flag."""
 
-# --- Założenie kosztowe (Faza 3, spec D4) -----------------------------------
+# --- Cost assumption -------------------------------------------------------
 #
-# Deklarowane ZANIM policzymy jakikolwiek próg. Przeoczony default forfeituje
-# niespłacony kapitał; fałszywy alarm forfeituje marżę na jednym odrzuconym
-# wniosku. 10:1 to obronione ZAŁOŻENIE, nie zmierzony fakt — i jako założenie
-# jest raportowane w docs/findings/03-model-selection.md.
+# Assumed ratio, declared before any threshold is computed, not measured.
+# A missed default forfeits unpaid principal; a false alarm forfeits the margin
+# on one rejected application.
 
 COST_FN: float = 10.0
-"""Koszt przeoczonego defaultu (false negative)."""
+"""Cost of a missed default (false negative)."""
 
 COST_FP: float = 1.0
-"""Koszt fałszywego alarmu (false positive)."""
+"""Cost of a false alarm (false positive)."""
 
-# --- Decyzje z EDA (Faza 2) -------------------------------------------------
+# --- EDA decisions ---------------------------------------------------------
 #
-# Te krotki są *zapisem decyzji*, nie mechanizmem. Samo usunięcie kolumny nie
-# wymaga kodu — `ColumnTransformer(remainder="drop")` odrzuca wszystko, czego
-# nie ma w grupach. Stała istnieje po to, żeby dało się to skontrolować:
-# `docs/findings/02-eda.md` uzasadnia każdy wpis, a testy pilnują spójności.
+# Dropping a column needs no code: ColumnTransformer(remainder="drop") discards
+# anything absent from the groups. These tuples exist so the choice is reviewable.
 
 DAYS_EMPLOYED_SENTINEL: int = 365243
-"""~1000 lat pracy. Tak zbiór koduje "niezatrudniony" — patrz spec D4.
+"""~1000 years of employment: how the dataset encodes "not employed".
 
-Występuje w 18.01% wierszy, a udział defaultów w tej grupie wynosi 5.40%
-wobec 8.66% w pozostałych — różnica jest realna, więc informacja zostaje
-zachowana jawnie jako `FLAG_NOT_EMPLOYED`.
+Present in 18.01% of rows, where the default rate is 5.40% against 8.66%
+elsewhere. The difference is real, so it is kept as `FLAG_NOT_EMPLOYED`.
 """
 
 DROPPED_COLUMNS: tuple[str, ...] = (
-    # 1. Blok mieszkaniowy: `_AVG` / `_MEDI` / `_MODE` to trzy kodowania tego
-    #    samego pojęcia (korelacje 0.96-0.998 wewnątrz każdej trójki). Decyzja
-    #    blokowa: zostaje `_MEDI`, znikają `_AVG` i `_MODE`. 28 kolumn.
+    # 1. Housing block: _AVG / _MEDI / _MODE encode the same quantity three
+    #    times (r = 0.96-0.998 within each triple). _MEDI stays. 28 columns.
     "APARTMENTS_AVG",
     "APARTMENTS_MODE",
     "BASEMENTAREA_AVG",
@@ -95,9 +87,8 @@ DROPPED_COLUMNS: tuple[str, ...] = (
     "YEARS_BEGINEXPLUATATION_MODE",
     "YEARS_BUILD_AVG",
     "YEARS_BUILD_MODE",
-    # 2. Flagi dokumentów, w których wartość dominująca pokrywa >= 99% wierszy.
-    #    Reguła mechaniczna, nie wybieranie po uważaniu: |r| z celem <= 0.012,
-    #    a po standaryzacji zostaje z nich szum. 16 kolumn.
+    # 2. Document flags whose dominant value covers >= 99% of rows.
+    #    |r| with the target <= 0.012. 16 columns.
     "FLAG_DOCUMENT_10",
     "FLAG_DOCUMENT_11",
     "FLAG_DOCUMENT_12",
@@ -114,29 +105,27 @@ DROPPED_COLUMNS: tuple[str, ...] = (
     "FLAG_DOCUMENT_4",
     "FLAG_DOCUMENT_7",
     "FLAG_DOCUMENT_9",
-    # 3. Duplikat sentinela. `FLAG_EMP_PHONE == 0` dla wszystkich 55 374 wierszy
-    #    z `DAYS_EMPLOYED == 365243` i tylko dla 12 innych — to niejawnie ta sama
-    #    flaga co `FLAG_NOT_EMPLOYED`, tyle że nieudokumentowana (r = 0.9998).
+    # 3. Sentinel duplicate. FLAG_EMP_PHONE == 0 for all 55,374 rows with
+    #    DAYS_EMPLOYED == 365243 and only 12 others (r = 0.9998).
     "FLAG_EMP_PHONE",
-    # 4. Pary niemal identyczne (patrz screening korelacji w notebooku).
-    "OBS_60_CNT_SOCIAL_CIRCLE",  # r = 0.9985 z OBS_30; zostaje OBS_30
-    "REGION_RATING_CLIENT",  # r = 0.9508 z _W_CITY, które ma silniejszy sygnał
+    # 4. Near-identical pairs.
+    "OBS_60_CNT_SOCIAL_CIRCLE",  # r = 0.9985 with OBS_30; OBS_30 stays
+    "REGION_RATING_CLIENT",  # r = 0.9508 with _W_CITY, which has more signal
 )
-"""Kolumny wypadające z modelu. Każdy wpis ma uzasadnienie w `02-eda.md`."""
+"""Columns excluded from the model."""
 
 INFORMATIVE_MISSING: tuple[str, ...] = (
-    "AMT_REQ_CREDIT_BUREAU_YEAR",  # brak = klient bez historii w biurze
-    "EXT_SOURCE_1",  # 56.4% braków, najsilniejsza rodzina cech (r = -0.155)
-    "EXT_SOURCE_3",  # 19.8% braków (r = -0.179)
-    "OWN_CAR_AGE",  # not_applicable: puste dla 202 924 z 202 929 bez auta
-    "TOTALAREA_MODE",  # reprezentant bloku mieszkaniowego (48.3% braków)
+    "AMT_REQ_CREDIT_BUREAU_YEAR",  # missing = no credit bureau history
+    "EXT_SOURCE_1",  # 56.4% missing, strongest feature family (r = -0.155)
+    "EXT_SOURCE_3",  # 19.8% missing (r = -0.179)
+    "OWN_CAR_AGE",  # not applicable: empty for 202,924 of 202,929 without a car
+    "TOTALAREA_MODE",  # represents the housing block (48.3% missing)
 )
-"""Podzbiór z jawnym wskaźnikiem braku (spec D3).
+"""Subset that gets an explicit missingness indicator.
 
-Celowo **pięć** kolumn, nie wszystkie 67 z brakami. Blok mieszkaniowy dzieli
-jeden wzorzec braku, więc wskaźnik dla każdej z 14 kolumn `_MEDI` dałby 14
-kolumn współliniowych; reprezentuje go `TOTALAREA_MODE`. Wybór jest decyzją,
-nie efektem ubocznym — i to on odróżnia D3 od `add_indicator=True` wszędzie.
+Five columns, not all 67 with missing values. The housing block shares one
+missingness pattern, so an indicator per `_MEDI` column would produce 14
+collinear columns; `TOTALAREA_MODE` represents it.
 """
 
 FEATURE_SOURCE_COLUMNS: tuple[str, ...] = (
@@ -157,12 +146,11 @@ FEATURE_SOURCE_COLUMNS: tuple[str, ...] = (
     "EXT_SOURCE_2",
     "EXT_SOURCE_3",
 )
-"""Surowe kolumny karmiące cechy pochodne.
+"""Raw columns that feed the derived features.
 
-Reguła przynależności do kontraktu wejściowego (spec D2): kolumna jest
-przyjmowana przez `/score`, jeśli **albo** zostaje cechą modelu, **albo**
-karmi cechę pochodną. Kolumna usunięta z modelu, ale licząca się do ilorazu,
-musi nadal być przyjmowana — inaczej iloraz zawsze wychodzi NaN.
+Input contract membership rule: `/score` accepts a column if it either becomes
+a model feature or feeds a derived one. A column dropped from the model but
+used in a ratio must still be accepted, or the ratio is always NaN.
 """
 
 ENGINEERED_FEATURES: tuple[str, ...] = (
@@ -176,24 +164,21 @@ ENGINEERED_FEATURES: tuple[str, ...] = (
     "GOODS_CREDIT_RATIO",
     "INCOME_PER_PERSON",
 )
-"""Cechy liczone przez `FeatureEngineer`. Kolejność ustala kolejność kolumn."""
+"""Features computed by `FeatureEngineer`. This order sets column order."""
 
 
 @dataclass(frozen=True)
 class FeatureGroups:
-    """Kolumny cech rozbite na grupy wymagające innego preprocessingu.
+    """Feature columns split into groups needing different preprocessing.
 
-    Podział steruje `build_preprocessor()` w Fazie 1: każda grupa dostaje własny
-    pipeline imputacji/skalowania/kodowania.
+    The split drives `build_preprocessor()`: each group gets its own
+    imputation, scaling and encoding pipeline.
 
     Attributes:
-        numeric: Ciągłe i dyskretne liczby (np. `AMT_INCOME_TOTAL`) —
-            imputacja medianą, skalowanie.
-        categorical: Kolumny nieliczbowe (np. `NAME_CONTRACT_TYPE`, a także
-            `FLAG_OWN_CAR`, który w tym zbiorze trzyma `"Y"`/`"N"`, nie 0/1) —
-            imputacja modą, one-hot.
-        binary: Liczbowe flagi 0/1 (np. `FLAG_MOBIL`) — imputacja, bez
-            skalowania.
+        numeric: Continuous and discrete numbers; median imputation, scaling.
+        categorical: Non-numeric columns, including `FLAG_OWN_CAR`, which holds
+            "Y"/"N" rather than 0/1; mode imputation, one-hot.
+        binary: Numeric 0/1 flags; imputation, no scaling.
     """
 
     numeric: tuple[str, ...]
@@ -202,11 +187,11 @@ class FeatureGroups:
 
     @property
     def all_features(self) -> tuple[str, ...]:
-        """Wszystkie kolumny cech, w kolejności grup."""
+        """All feature columns, in group order."""
         return self.numeric + self.categorical + self.binary
 
     def to_dict(self) -> dict[str, list[str]]:
-        """Serializuje grupy do postaci nadającej się do zapisu obok modelu."""
+        """Serialise the groups for storage beside the model."""
         return {
             "numeric": list(self.numeric),
             "categorical": list(self.categorical),
@@ -215,13 +200,13 @@ class FeatureGroups:
 
     @classmethod
     def from_dict(cls, payload: dict[str, list[str]]) -> FeatureGroups:
-        """Odtwarza grupy zapisane w czasie treningu.
+        """Rebuild the groups stored at training time.
 
         Args:
-            payload: Słownik z `to_dict()`.
+            payload: Dictionary from `to_dict()`.
 
         Returns:
-            Te same grupy, w tej samej kolejności.
+            The same groups, in the same order.
         """
         return cls(
             numeric=tuple(payload["numeric"]),
@@ -233,28 +218,25 @@ class FeatureGroups:
 def split_feature_groups(
     df: pd.DataFrame, dropped: tuple[str, ...] = ()
 ) -> FeatureGroups:
-    """Wyprowadza grupy cech z **ramki treningowej**.
+    """Derive feature groups from the training frame.
 
-    Ostrzeżenie:
-        Wynik jest funkcją przekazanej próbki, nie schematu. Kolumna liczbowa
-        trafia do `binary` na podstawie wartości, które faktycznie wystąpiły —
-        na ramce jednowierszowej (scoring pojedynczego wniosku w Fazie 6)
-        `CNT_CHILDREN == 0` wyglądałoby jak flaga. Dlatego grupy wyprowadzamy
-        **raz**, na pełnym zbiorze treningowym, i zapisujemy przez `to_dict()`
-        razem z artefaktem modelu. Serwowanie odtwarza je przez `from_dict()`
-        i **nigdy** nie wywołuje tej funkcji na danych żądania — inaczej
-        dostajemy train/serve skew.
+    The result is a function of the sample passed in, not of a schema: a
+    numeric column lands in `binary` based on the values actually present, so
+    on a one-row frame `CNT_CHILDREN == 0` would look like a flag. Groups are
+    therefore derived once, on the full training set, and stored with the model
+    via `to_dict()`. Serving rebuilds them with `from_dict()` and never calls
+    this function on request data, which would cause train/serve skew.
 
-    Kolumna celu i identyfikator są wyłączone — nie są cechami.
+    The target and id columns are excluded; they are not features.
 
     Args:
-        df: Pełna ramka treningowa wczytana przez `data.load_data`.
-        dropped: Kolumny wykluczone decyzją z EDA (`config.DROPPED_COLUMNS`).
-            Domyślnie pusta krotka, więc wywołania z Fazy 1 działają bez zmian.
+        df: Full training frame loaded by `data.load_data`.
+        dropped: Columns excluded by the EDA decisions
+            (`config.DROPPED_COLUMNS`). Defaults to an empty tuple.
 
     Returns:
-        Grupy cech; każda lista posortowana alfabetycznie dla stabilności
-        kolejności kolumn między uruchomieniami.
+        Feature groups; each list sorted alphabetically so column order is
+        stable across runs.
     """
     excluded = {TARGET, ID_COLUMN, *dropped}
     feature_cols = [c for c in df.columns if c not in excluded]
@@ -265,16 +247,13 @@ def split_feature_groups(
 
     for col in feature_cols:
         series = df[col]
-        # Rozgałęziamy po "czy liczbowe", a nie po `dtype == "object"`: pandas 3.0
-        # wnioskuje dla tekstu dedykowany dtype `str`, więc test na `object`
-        # po cichu wpuściłby kolumny tekstowe do grupy numerycznej.
+        # Branch on "is numeric", not dtype == "object": pandas 3.0 infers a
+        # dedicated str dtype, so an object test would let text into numeric.
         if pd.api.types.is_bool_dtype(series):
             binary.append(col)
         elif pd.api.types.is_numeric_dtype(series):
-            # Test na wartości, nie na `nunique() <= 2`: przy liczeniu unikatów
-            # kolumna pusta (0 unikatów) i stała (1 unikat) też przechodziły
-            # jako flagi, choć jedna nie niesie nic, a druga może być dowolną
-            # liczbą.
+            # Test the values, not nunique() <= 2: counting uniques also
+            # admits empty (0) and constant (1) columns as flags.
             values = set(series.dropna().unique())
             if values and values <= BINARY_VALUES:
                 binary.append(col)
@@ -290,14 +269,13 @@ def split_feature_groups(
     )
 
 
-# MLflow 3.x odrzuca backend plikowy ("./mlruns") — jest w trybie utrzymaniowym
-# i `set_experiment` rzuca wyjątkiem, dopóki nie ustawi się MLFLOW_ALLOW_FILE_STORE.
-# Zamiast wchodzić w wycofywany backend, bierzemy SQLite: rejestr modeli i alias
-# @production i tak wymagają backendu bazodanowego. `mlflow.db` jest w .gitignore.
-# as_posix(): SQLAlchemy oczekuje ukośników, a nie windowsowych backslashy.
+# MLflow 3.x rejects the file backend ("./mlruns"): set_experiment raises
+# unless MLFLOW_ALLOW_FILE_STORE is set. SQLite is used instead; the model
+# registry and the @production alias require a database backend anyway.
+# as_posix(): SQLAlchemy expects forward slashes, not Windows backslashes.
 MLFLOW_TRACKING_URI: str = f"sqlite:///{(PROJECT_ROOT / 'mlflow.db').as_posix()}"
-"""Wspólne źródło prawdy dla `train`, `registry` i `tune`.
+"""Shared by `train`, `registry` and `tune`.
 
-Mieszka tutaj, a nie w `train.py`, bo `registry.py` też go potrzebuje —
-import z `train` zrobiłby cykl.
+Defined here rather than in `train.py` because `registry.py` needs it too and
+importing from `train` would create a cycle.
 """

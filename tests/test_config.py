@@ -1,4 +1,4 @@
-"""Testy podziału kolumn na grupy cech — bez dostępu do prawdziwych danych."""
+"""Tests for splitting columns into feature groups, without real data."""
 
 from __future__ import annotations
 
@@ -20,10 +20,10 @@ from config import (
 
 @pytest.fixture
 def frame() -> pd.DataFrame:
-    """Miniaturowa ramka odwzorowująca typy kolumn z Home Credit.
+    """A miniature frame mirroring the Home Credit column types.
 
-    `FLAG_OWN_CAR` celowo trzyma `"Y"`/`"N"` — tak jest w prawdziwym zbiorze,
-    mimo przedrostka `FLAG_`. Flagą liczbową jest `FLAG_MOBIL`.
+    `FLAG_OWN_CAR` deliberately holds "Y"/"N", as it does in the real dataset,
+    despite the `FLAG_` prefix. `FLAG_MOBIL` is the numeric flag.
     """
     return pd.DataFrame(
         {
@@ -52,10 +52,10 @@ def test_columns_are_grouped_by_kind(frame: pd.DataFrame) -> None:
 
 
 def test_text_columns_never_land_in_numeric(frame: pd.DataFrame) -> None:
-    """Regresja: pandas 3.0 nadaje tekstowi dtype `str`, nie `object`.
+    """Regression: pandas 3.0 gives text a `str` dtype, not `object`.
 
-    Test na `dtype == "object"` przepuściłby kolumnę tekstową do grupy
-    numerycznej, co wysypałoby się dopiero na etapie enkodera w Fazie 1.
+    A `dtype == "object"` test would let a text column into the numeric group,
+    which would only fail later, at the encoder.
     """
     groups = split_feature_groups(frame)
     assert "NAME_CONTRACT_TYPE" not in groups.numeric
@@ -63,7 +63,7 @@ def test_text_columns_never_land_in_numeric(frame: pd.DataFrame) -> None:
 
 
 def test_constant_and_empty_columns_are_not_flags() -> None:
-    """Regresja: `nunique() <= 2` uznawało kolumnę pustą i stałą za flagę."""
+    """Regression: `nunique() <= 2` treated empty and constant columns as flags."""
     df = pd.DataFrame(
         {
             ID_COLUMN: [1, 2, 3],
@@ -81,7 +81,7 @@ def test_every_feature_lands_in_exactly_one_group(frame: pd.DataFrame) -> None:
     groups = split_feature_groups(frame)
     expected = set(frame.columns) - {TARGET, ID_COLUMN}
     assert set(groups.all_features) == expected
-    assert len(groups.all_features) == len(expected), "kolumna trafiła do dwóch grup"
+    assert len(groups.all_features) == len(expected), "column landed in two groups"
 
 
 def test_groups_are_immutable() -> None:
@@ -91,7 +91,7 @@ def test_groups_are_immutable() -> None:
 
 
 def test_groups_round_trip_through_dict(frame: pd.DataFrame) -> None:
-    """Grupy muszą przeżyć zapis obok modelu i odtworzenie przy serwowaniu."""
+    """Groups must survive being stored with the model and rebuilt at serving."""
     groups = split_feature_groups(frame)
     assert FeatureGroups.from_dict(groups.to_dict()) == groups
 
@@ -99,11 +99,11 @@ def test_groups_round_trip_through_dict(frame: pd.DataFrame) -> None:
 def test_derivation_is_sample_dependent_so_groups_must_be_frozen(
     frame: pd.DataFrame,
 ) -> None:
-    """Dokumentuje powód, dla którego grupy zapisujemy razem z modelem.
+    """Documents why the groups are stored with the model.
 
-    Na ramce jednowierszowej — czyli dokładnie tym, co dostaje `/score` w
-    Fazie 6 — `CNT_CHILDREN == 0` wygląda jak flaga 0/1. Serwowanie musi więc
-    odtwarzać grupy przez `from_dict()`, a nie liczyć je z danych żądania.
+    On a one-row frame, exactly what `/score` receives, `CNT_CHILDREN == 0` looks
+    like a 0/1 flag. Serving must therefore rebuild the groups with `from_dict()`
+    rather than derive them from the request data.
     """
     train_groups = split_feature_groups(frame)
     request_groups = split_feature_groups(frame.head(1))
@@ -113,7 +113,7 @@ def test_derivation_is_sample_dependent_so_groups_must_be_frozen(
     assert train_groups != request_groups
 
 
-# --- Faza 2: decyzje z EDA -------------------------------------------------
+# --- EDA decisions ---
 
 
 def test_dropped_columns_are_unique() -> None:
@@ -121,12 +121,12 @@ def test_dropped_columns_are_unique() -> None:
 
 
 def test_informative_missing_is_not_dropped() -> None:
-    """Kolumna nie może być jednocześnie usunięta i oznaczana wskaźnikiem."""
+    """A column cannot be both dropped and given a missingness indicator."""
     assert not set(INFORMATIVE_MISSING) & set(DROPPED_COLUMNS)
 
 
 def test_feature_sources_are_not_dropped_from_the_input_contract() -> None:
-    """D2: kolumna karmiąca cechę pochodną musi zostać przyjmowana przez /score."""
+    """A column feeding a derived feature must stay accepted by /score."""
     from api.schemas import FEATURE_GROUPS
 
     accepted = set(FEATURE_GROUPS.all_features)
@@ -142,7 +142,7 @@ def test_split_feature_groups_honours_dropped() -> None:
 
 
 def test_split_feature_groups_default_drops_nothing() -> None:
-    """Wywołania z Fazy 1 muszą działać bez zmian."""
+    """The default call drops nothing."""
     frame = pd.DataFrame({"a": [1.0, 2.0], "b": [3.0, 4.0]})
     assert set(split_feature_groups(frame).all_features) == {"a", "b"}
 
@@ -152,5 +152,5 @@ def test_sentinel_value_is_the_documented_one() -> None:
 
 
 def test_engineered_features_are_not_raw_columns() -> None:
-    """Nazwy cech pochodnych nie mogą kolidować z kolumnami źródłowymi."""
+    """Derived feature names must not collide with source columns."""
     assert not set(ENGINEERED_FEATURES) & set(FEATURE_SOURCE_COLUMNS)

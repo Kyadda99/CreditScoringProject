@@ -1,9 +1,8 @@
-"""Zapis i odczyt artefaktu modelu.
+"""Model artifact save and load.
 
-Pipeline i grupy cech jadą w **jednym** pliku. To nie jest wygoda, tylko
-zabezpieczenie: `split_feature_groups` zależy od próbki, więc serwowanie musi
-odtworzyć dokładnie te grupy, na których model był uczony. Dwa osobne pliki
-dałoby się zaktualizować niezależnie — i dokładnie ten błąd tu eliminujemy.
+The pipeline and the feature groups travel in one file. `split_feature_groups`
+depends on the sample, so serving must rebuild exactly the groups the model was
+trained on; two separate files could be updated independently.
 """
 
 from __future__ import annotations
@@ -31,17 +30,17 @@ _INPUT_GROUPS_KEY = "input_feature_groups"
 
 @dataclass(frozen=True)
 class Bundle:
-    """Wytrenowany model wraz ze wszystkim, czego potrzeba, żeby go użyć.
+    """A trained model together with everything needed to use it.
 
     Attributes:
-        pipeline: Dopasowany `Pipeline` — preprocessing i estymator razem.
-        groups: Grupy cech wyprowadzone na zbiorze treningowym **po**
-            inżynierii cech. To one sterują `ColumnTransformer`.
-        input_groups: Surowe kolumny, które przyjmuje `/score` (spec D2).
-            Różne od `groups`: model konsumuje cechy pochodne, których klient
-            nie ma jak przysłać. `to_frame` buduje wiersz z **tego** kontraktu,
-            a `lifespan` porównuje z nim commitowany `feature_schema.json`.
-        metadata: Kontekst uruchomienia — metryki, wersje, liczności.
+        pipeline: Fitted `Pipeline`: preprocessing and estimator together.
+        groups: Feature groups derived on the training set after feature
+            engineering. These drive the `ColumnTransformer`.
+        input_groups: Raw columns `/score` accepts. Different from `groups`
+            because the model consumes derived features the client cannot
+            send. `to_frame` builds its row from this contract, and `lifespan`
+            compares the committed `feature_schema.json` against it.
+        metadata: Run context: metrics, versions, counts.
     """
 
     pipeline: Pipeline
@@ -57,17 +56,17 @@ def save_bundle(
     metadata: dict[str, Any],
     path: Path = DEFAULT_ARTIFACT_PATH,
 ) -> Path:
-    """Zapisuje model, oba kontrakty kolumn i metadane do jednego pliku.
+    """Write the model, both column contracts and metadata to one file.
 
     Args:
-        pipeline: Dopasowany pipeline.
-        groups: Grupy cech modelu (po inżynierii cech).
-        input_groups: Kontrakt wejściowy — surowe kolumny przyjmowane przez API.
-        metadata: Dowolny słownik serializowalny przez joblib.
-        path: Ścieżka docelowa; katalogi nadrzędne są tworzone.
+        pipeline: Fitted pipeline.
+        groups: Model feature groups, after feature engineering.
+        input_groups: Input contract: raw columns the API accepts.
+        metadata: Any joblib-serialisable dictionary.
+        path: Destination path; parent directories are created.
 
     Returns:
-        Ścieżka zapisanego pliku.
+        Path of the written file.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(
@@ -79,49 +78,44 @@ def save_bundle(
         },
         path,
     )
-    logger.info("Zapisano artefakt: %s (%.1f MB)", path, path.stat().st_size / 1024**2)
+    logger.info("Saved artifact: %s (%.1f MB)", path, path.stat().st_size / 1024**2)
     return path
 
 
 def load_bundle(path: Path = DEFAULT_ARTIFACT_PATH) -> Bundle:
-    """Wczytuje artefakt zapisany przez `save_bundle`.
+    """Load an artifact written by `save_bundle`.
 
     Args:
-        path: Ścieżka do pliku `.joblib`.
+        path: Path to the `.joblib` file.
 
     Returns:
-        Odtworzony `Bundle`.
+        The restored `Bundle`.
 
     Raises:
-        FileNotFoundError: Gdy pliku nie ma; komunikat wskazuje `cs-train`,
-            bo to najczęstsza przyczyna.
+        FileNotFoundError: When the file is absent; the message points at
+            `cs-train`, the usual cause.
     """
     if not path.exists():
-        raise FileNotFoundError(
-            f"Brak artefaktu modelu: {path}\nUruchom: uv run cs-train"
-        )
+        raise FileNotFoundError(f"Missing model artifact: {path}\nRun: uv run cs-train")
     payload = joblib.load(path)
-    # Artefakt sprzed Fazy 2 ma tylko jeden kontrakt kolumn. Serwowanie z niego
-    # znaczyłoby budowanie wiersza żądania z grup MODELU, czyli z cechami
-    # pochodnymi, których klient nie przysyła — cicho same NaN-y. Głośny błąd
-    # jest tu jedyną uczciwą odpowiedzią.
+    # An older artifact carries only one column contract. Serving from it
+    # would build the request row from the model groups, whose derived
+    # features the client never sends, yielding silent NaNs.
     if _INPUT_GROUPS_KEY not in payload:
         raise KeyError(
-            f"Artefakt {path} nie zawiera kontraktu wejściowego — pochodzi "
-            "sprzed Fazy 2. Przetrenuj model: uv run cs-train"
+            f"Artifact {path} has no input contract. "
+            "Retrain the model: uv run cs-train"
         )
     metadata = payload[_METADATA_KEY]
 
-    # `sklearn_version` było zapisywane i nigdy nieczytane. Artefakt powstaje
-    # POZA obrazem i jest do niego kopiowany, więc nic nie gwarantuje zgodności
-    # wersji — a joblib nie obiecuje przenośności piklów między wersjami
-    # scikit-learn. Ostrzeżenie, nie wyjątek: rozbieżność zwykle działa, ale
-    # gdy zacznie dawać dziwne wyniki, to jest pierwsze miejsce do sprawdzenia.
+    # The artifact is built outside the image and copied in, so nothing
+    # guarantees version agreement. A warning, not an exception: a mismatch
+    # usually works, but it is the first thing to check on odd results.
     trained_with = metadata.get("sklearn_version")
     if trained_with and trained_with != sklearn.__version__:
         logger.warning(
-            "Artefakt wytrenowany na scikit-learn %s, wczytywany na %s. "
-            "Pikle sklearn nie są gwarantowane między wersjami.",
+            "Artifact trained on scikit-learn %s, loaded on %s. "
+            "sklearn pickles are not guaranteed across versions.",
             trained_with,
             sklearn.__version__,
         )

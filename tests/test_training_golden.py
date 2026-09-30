@@ -1,13 +1,14 @@
-"""Złota próbka: metryki na stałym zbiorze syntetycznym.
+"""Golden sample: metrics on a fixed synthetic dataset.
 
-Ten test nie ocenia jakości modelu — dane są losowe, więc ROC-AUC bliskie 0.5
-jest tu poprawnym wynikiem. Pilnuje czegoś innego: że cała ścieżka treningowa
-(strategie, potok, próg z predykcji out-of-fold) liczy **dokładnie to samo** co
-w chwili zapisania tych wartości. Literówka w hiperparametrze albo przestawiony
-krok potoku wywala ten test w CI, bez 158 MB prawdziwych danych.
+This does not judge model quality; the data is random, so a ROC-AUC near 0.5
+is the correct result here. It pins something else: that the whole training
+path (strategies, pipeline, threshold from out-of-fold predictions) computes
+exactly what it computed when these values were recorded. A typo in a
+hyperparameter or a reordered pipeline step fails this test in CI, without the
+real data.
 
-Wartości spisane 2026-09-28 z działającego kodu. Jeśli zmienisz konfigurację
-modeli świadomie, zaktualizuj je i opisz zmianę w dokumencie fazy.
+Values recorded 2026-09-28 from working code. If the model configuration is
+changed deliberately, update them and record the change.
 """
 
 from __future__ import annotations

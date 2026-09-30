@@ -1,4 +1,4 @@
-"""Testy budowania preprocessora — bez dostępu do prawdziwych danych."""
+"""Tests for building the preprocessor, without access to real data."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def frame() -> pd.DataFrame:
 def test_returns_unfitted_column_transformer(groups: FeatureGroups) -> None:
     pre = build_preprocessor(groups)
     assert isinstance(pre, ColumnTransformer)
-    # Niedopasowany transformer nie ma jeszcze atrybutów kończących się na "_".
+    # An unfitted transformer has no attributes ending in "_" yet.
     assert not hasattr(pre, "transformers_")
 
 
@@ -51,19 +51,19 @@ def test_fits_and_transforms(groups: FeatureGroups, frame: pd.DataFrame) -> None
     pre = build_preprocessor(groups)
     out = pre.fit_transform(frame)
     assert out.shape[0] == len(frame)
-    assert np.isfinite(np.asarray(out, dtype=float)).all(), "imputacja zostawiła NaN"
+    assert np.isfinite(np.asarray(out, dtype=float)).all(), "imputation left NaN"
 
 
 def test_unseen_category_does_not_raise(
     groups: FeatureGroups, frame: pd.DataFrame
 ) -> None:
-    """handle_unknown='ignore' — inaczej /score zwracałoby 500 na nowej wartości."""
+    """handle_unknown="ignore", or /score would return 500 on a new value."""
     pre = build_preprocessor(groups).fit(frame)
     unseen = pd.DataFrame(
         {
             "AMT_INCOME_TOTAL": [1500.0],
             "CNT_CHILDREN": [1],
-            "NAME_CONTRACT_TYPE": ["Nieznany typ"],
+            "NAME_CONTRACT_TYPE": ["Unknown type"],
             "FLAG_MOBIL": [1],
         }
     )
@@ -74,14 +74,14 @@ def test_unseen_category_does_not_raise(
 def test_binary_column_is_not_scaled(
     groups: FeatureGroups, frame: pd.DataFrame
 ) -> None:
-    """Flagi 0/1 nie są skalowane — mają zostać sobą."""
+    """0/1 flags are not scaled; they must stay themselves."""
     pre = build_preprocessor(groups).fit(frame)
     out = np.asarray(pre.transform(frame), dtype=float)
     binary_column = out[:, -1]
     assert set(np.unique(binary_column)) <= {0.0, 1.0}
 
 
-# --- Faza 2: gałąź informative-missing (spec D3) ---------------------------
+# --- The informative-missing branch ---
 
 
 def test_informative_columns_get_their_own_branch() -> None:
@@ -100,7 +100,7 @@ def test_informative_branch_receives_only_those_columns() -> None:
 
 
 def test_informative_branch_emits_an_indicator_column() -> None:
-    """Wskaźnik to dodatkowa kolumna — bez niej decyzja D3 jest deklaracją."""
+    """The indicator is an extra column; without it the decision is a claim."""
     groups = FeatureGroups(numeric=("a",), categorical=(), binary=())
     preprocessor = build_preprocessor(groups, informative_missing=("a",))
     frame = pd.DataFrame({"a": [1.0, np.nan, 3.0]})
@@ -108,7 +108,7 @@ def test_informative_branch_emits_an_indicator_column() -> None:
 
 
 def test_no_informative_columns_means_no_extra_branch() -> None:
-    """Transza porównawcza bez wskaźników nie może mieć pustego transformera."""
+    """A comparison run without indicators must not get an empty transformer."""
     groups = FeatureGroups(numeric=("a",), categorical=(), binary=())
     preprocessor = build_preprocessor(groups, informative_missing=())
     names = [name for name, _, _ in preprocessor.transformers]
@@ -116,7 +116,7 @@ def test_no_informative_columns_means_no_extra_branch() -> None:
 
 
 def test_informative_columns_absent_from_groups_are_ignored() -> None:
-    """Kolumna usunięta z modelu nie wraca przez INFORMATIVE_MISSING."""
+    """A column dropped from the model does not return via INFORMATIVE_MISSING."""
     groups = FeatureGroups(numeric=("a",), categorical=(), binary=())
     preprocessor = build_preprocessor(groups, informative_missing=("zzz",))
     by_name = {name: columns for name, _, columns in preprocessor.transformers}

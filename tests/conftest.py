@@ -1,8 +1,7 @@
-"""Wspólna konfiguracja pytest.
+"""Shared pytest configuration.
 
-Testy kontraktu danych wymagają ~160 MB CSV, którego CI nie ma (brak
-poświadczeń Kaggle i brak sensu pobierania takiego pliku w workflow).
-Marker `requires_data` pozwala pominąć je czysto — bez wyłączania całego pliku.
+The data contract tests need the ~160 MB CSV, which CI does not have. The
+`requires_data` marker skips them cleanly without disabling the whole file.
 """
 
 from __future__ import annotations
@@ -20,10 +19,10 @@ from config import DATA_PATH
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
-    """Pomija testy oznaczone `requires_data`, gdy zbioru nie ma na dysku."""
+    """Skip tests marked `requires_data` when the dataset is not on disk."""
     if DATA_PATH.exists():
         return
-    skip = pytest.mark.skip(reason=f"Brak {DATA_PATH}; uruchom `uv run cs-download`")
+    skip = pytest.mark.skip(reason=f"Missing {DATA_PATH}; run `uv run cs-download`")
     for item in items:
         if "requires_data" in item.keywords:
             item.add_marker(skip)
@@ -31,10 +30,10 @@ def pytest_collection_modifyitems(
 
 @pytest.fixture(scope="session", autouse=True)
 def _write_column_manifest() -> None:
-    """Spisuje manifest kolumn z prawdziwego pliku, gdy `CS_WRITE_MANIFEST=1`.
+    """Write the column manifest from the real file when CS_WRITE_MANIFEST=1.
 
-    Jednorazowa czynność po pierwszym pobraniu danych; wynik jest commitowany
-    i od tego momentu każda zmiana nazwy kolumny wywala test kontraktu.
+    Run once after the first download; the result is committed, and from then on
+    any column rename fails the contract test.
     """
     if os.environ.get("CS_WRITE_MANIFEST") != "1" or not DATA_PATH.exists():
         return
@@ -45,19 +44,17 @@ def _write_column_manifest() -> None:
     columns = list(load_data().columns)
     MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
     MANIFEST_PATH.write_text(json.dumps(columns, indent=2), encoding="utf-8")
-    print(f"\nZapisano manifest {len(columns)} kolumn -> {MANIFEST_PATH}")
+    print(f"\nWrote a manifest of {len(columns)} columns -> {MANIFEST_PATH}")
 
 
 @pytest.fixture(scope="session")
 def synthetic_artifact(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Buduje maleńki, ale PRAWDZIWY artefakt modelu — bez 158 MB CSV.
+    """Build a tiny but real model artifact, without the 158 MB CSV.
 
-    Powód: testy HTTP pilnują kryteriów ukończenia Fazy 1 (`/health`, `/score`
-    zwracające prawdopodobieństwo, 422 na błędnym ciele). Gdy wisiały na
-    markerze `requires_data`, CI pomijało je wszystkie i regresja w `/score`
-    wchodziła na zielono. Kolumny bierzemy z **commitowanego**
-    `feature_schema.json`, więc pipeline ma dokładnie ten kontrakt co produkcja
-    — tylko nauczony na kilkunastu zmyślonych wierszach.
+    These HTTP tests once hung on the `requires_data` marker, so CI skipped them
+    all and a regression in /score went green. The columns come from the committed
+    `feature_schema.json`, so the pipeline has exactly the production contract,
+    trained on a handful of invented rows.
     """
     import numpy as np
     import pandas as pd
@@ -68,13 +65,13 @@ def synthetic_artifact(tmp_path_factory: pytest.TempPathFactory) -> Path:
     from features import FeatureEngineer
     from preprocessor import Preprocessor
 
-    inputs = load_feature_groups()  # kontrakt WEJŚCIOWY — surowe kolumny
+    inputs = load_feature_groups()  # input contract: raw columns
     rng = np.random.default_rng(0)
     rows = 40
     data: dict[str, object] = {}
     for name in inputs.numeric:
-        # Dodatnie i z dala od zera: mianowniki ilorazów nie mogą być zerem,
-        # bo cała kolumna wyszłaby NaN i imputer nie miałby czego się nauczyć.
+        # Positive and away from zero: a ratio denominator cannot be zero, or the
+        # whole column comes out NaN and the imputer has nothing to learn from.
         data[name] = rng.uniform(1.0, 100.0, size=rows)
     for name in inputs.binary:
         data[name] = rng.integers(0, 2, size=rows).astype(float)
@@ -83,7 +80,7 @@ def synthetic_artifact(tmp_path_factory: pytest.TempPathFactory) -> Path:
     frame = pd.DataFrame(data, columns=list(inputs.all_features))
     target = rng.integers(0, 2, size=rows)
 
-    # Grupy MODELU wyprowadzamy z ramki po inżynierii — tak samo jak `train.main`.
+    # Model groups come from the frame after engineering, as training does.
     engineered = FeatureEngineer().fit_transform(frame)
     groups = split_feature_groups(engineered, dropped=DROPPED_COLUMNS)
 

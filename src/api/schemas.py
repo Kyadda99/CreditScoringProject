@@ -1,11 +1,8 @@
-"""Schematy żądań i odpowiedzi.
+"""Request and response schemas.
 
-Model żądania jest **generowany** z `feature_schema.json`, a nie pisany ręcznie.
-Powód: 120 pól przepisanych z palca rozjedzie się z kontraktem danych przy
-pierwszej zmianie kolumny, i to po cichu. Generowanie z tego samego pliku, który
-produkuje trening, sprawia, że rozjazd jest niemożliwy.
-
-Koszt tej decyzji: brak statycznego typowania modelu żądania.
+The request model is generated from `feature_schema.json`, the same file
+training produces, rather than hand-written. The cost is no static typing on
+the request model.
 """
 
 from __future__ import annotations
@@ -36,61 +33,56 @@ EXAMPLES: dict[str, Any] = {
     "NAME_EDUCATION_TYPE": "Secondary / secondary special",
     "NAME_FAMILY_STATUS": "Single / not married",
 }
-"""Przykłady dla pól najbardziej sensownych w demie — żeby /docs dało się użyć.
-Pozostałe pola nie mają przykładu; przy 120 polach byłby to szum."""
+"""Examples for the fields most useful in /docs."""
 
 
 def load_feature_groups(path: Path = FEATURE_SCHEMA_PATH) -> FeatureGroups:
-    """Wczytuje commitowany kontrakt cech.
+    """Load the committed feature contract.
 
     Args:
-        path: Ścieżka do `feature_schema.json`.
+        path: Path to `feature_schema.json`.
 
     Returns:
-        Grupy cech w takiej postaci, w jakiej zapisał je trening.
+        Feature groups exactly as training wrote them.
 
     Raises:
-        FileNotFoundError: Gdy pliku nie ma — powstaje dopiero przy treningu.
+        FileNotFoundError: When the file is absent; training creates it.
     """
     if not path.exists():
         raise FileNotFoundError(
-            f"Brak kontraktu cech: {path}\n"
-            "Powstaje przy treningu — uruchom: uv run cs-train"
+            f"Missing feature contract: {path}\n"
+            "Training creates it - run: uv run cs-train"
         )
     return FeatureGroups.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
 
 def _example_for(name: str) -> list[Any] | None:
-    """Zwraca listę z przykładem albo None, gdy pola nie ma w EXAMPLES."""
+    """Return a one-item example list, or None when the field has none."""
     return [EXAMPLES[name]] if name in EXAMPLES else None
 
 
 def _build_request_model(groups: FeatureGroups) -> type[BaseModel]:
-    """Buduje model żądania z grup cech.
+    """Build the request model from feature groups.
 
-    Kolumny numeryczne i binarne przyjmują liczbę, kategoryczne tekst. Wszystkie
-    pola są opcjonalne — brak pola oznacza brak wartości, którą uzupełni
-    dopasowany imputer.
+    Numeric and binary columns take a number, categorical ones text. Every
+    field is optional; an absent field means a missing value for the imputer.
 
     Args:
-        groups: Grupy cech z commitowanego kontraktu.
+        groups: Feature groups from the committed contract.
 
     Returns:
-        Klasa modelu pydantic o polach odpowiadających cechom.
+        A pydantic model class with one field per feature.
     """
     fields: dict[str, Any] = {}
-    # allow_inf_nan=False: bez tego `Infinity` w ciele żądania przechodzi walidację
-    # i wywraca się dopiero w `_assert_all_finite` sklearn-a, co bare `except`
-    # w /score zamieniał na 500. Nieskończoność w dochodzie to błąd klienta,
-    # czyli 422, a nie awaria serwera.
+    # allow_inf_nan=False: otherwise Infinity passes validation and only fails
+    # in sklearn's _assert_all_finite, which /score turned into a 500.
     for name in groups.numeric:
         fields[name] = (
             float | None,
             Field(default=None, allow_inf_nan=False, examples=_example_for(name)),
         )
-    # Flagi binarne przyjmują wyłącznie 0/1. Bez tego `{"FLAG_MOBIL": 7.3}`
-    # zwracało 200 i realnie przesuwało wynik (0.0674 -> 0.0045), bo wartość
-    # spoza dziedziny szła prosto do modelu.
+    # Binary flags accept only 0/1. Without this an out-of-domain value such as
+    # {"FLAG_MOBIL": 7.3} returned 200 and moved the score (0.0674 -> 0.0045).
     for name in groups.binary:
         fields[name] = (
             float | None,
@@ -109,8 +101,8 @@ def _build_request_model(groups: FeatureGroups) -> type[BaseModel]:
         )
     return create_model(
         "ScoreRequest",
-        # extra="forbid": literówka w nazwie kolumny ma zwrócić 422, a nie
-        # zostać po cichu zignorowana i dać wynik z samych imputacji.
+        # extra="forbid": a misspelled column returns 422 instead of being
+        # ignored and scored from imputations alone.
         __config__=ConfigDict(extra="forbid"),
         **fields,
     )
@@ -121,32 +113,32 @@ ScoreRequest: type[BaseModel] = _build_request_model(FEATURE_GROUPS)
 
 
 class ScoreResponse(BaseModel):
-    """Wynik scoringu jednego wniosku."""
+    """Scoring result for a single application."""
 
     probability: float = Field(
         ...,
         ge=0.0,
         le=1.0,
-        description="Prawdopodobieństwo trudności ze spłatą.",
+        description="Probability of difficulty repaying.",
         examples=[0.0731],
     )
     decision: bool = Field(
         ...,
-        description="True, gdy prawdopodobieństwo osiąga próg — czyli wniosek "
-        "jest oznaczony jako ryzykowny.",
+        description="True when the probability reaches the threshold, marking "
+        "the application as risky.",
         examples=[False],
     )
     threshold: float = Field(
         ...,
         ge=0.0,
         le=1.0,
-        description="Próg, który wyprodukował decyzję. Zwracany jawnie, żeby "
-        "dało się zinterpretować wynik bez zaglądania do konfiguracji.",
+        description="Threshold that produced the decision. Returned explicitly "
+        "so the result can be interpreted without reading the configuration.",
         examples=[0.5],
     )
 
 
 class HealthResponse(BaseModel):
-    """Odpowiedź sondy zdrowia."""
+    """Health probe response."""
 
     status: str = Field(..., examples=["ok"])

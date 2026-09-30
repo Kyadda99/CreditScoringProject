@@ -1,4 +1,4 @@
-"""Kontrakt Preprocessora: składa, nigdy nie dopasowuje."""
+"""Preprocessor contract: it assembles, it never fits."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from test_characterisation import synthetic_frame
 
 
 def _groups(frame: pd.DataFrame) -> FeatureGroups:
-    """Zwraca grupy cech modelu dla ramki po inżynierii cech."""
+    """Return the model feature groups for a frame after engineering."""
     engineered = Preprocessor(split_feature_groups(frame)).engineer(frame)
     return split_feature_groups(engineered, dropped=DROPPED_COLUMNS)
 
@@ -41,7 +41,7 @@ def test_sampler_produces_an_imblearn_pipeline() -> None:
 def test_returned_pipeline_is_unfitted() -> None:
     frame, _ = synthetic_frame()
     pipeline = Preprocessor(_groups(frame)).build_pipeline()
-    # clone() przechodzi tylko na niedopasowanym estymatorze o czystych parametrach.
+    # clone() only works on an unfitted estimator with untouched parameters.
     assert clone(pipeline) is not pipeline
 
 

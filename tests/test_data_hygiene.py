@@ -1,8 +1,8 @@
-"""Testy higieny wierszy — bez dostępu do prawdziwych danych.
+"""Row hygiene tests, without access to real data.
 
-Osobny plik, bo `test_data_contract.py` ma modułowy `pytestmark =
-requires_data`. Te testy działają na ramkach syntetycznych i muszą być zielone
-także w CI, gdzie zbioru nie ma.
+A separate file because `test_data_contract.py` has a module-level
+`requires_data` mark. These run on synthetic frames and must be green in CI,
+where the dataset is absent.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ def test_rows_without_a_target_are_dropped() -> None:
 
 
 def test_xna_gender_rows_are_dropped() -> None:
-    """Cztery wiersze na 307 tysięcy; kategoria "XNA" to brak, nie płeć."""
+    """Four rows in 307 thousand; the "XNA" category is missing, not a gender."""
     frame = pd.DataFrame({"TARGET": [0.0, 1.0], "CODE_GENDER": ["M", "XNA"]})
     assert drop_unusable_rows(frame)["CODE_GENDER"].tolist() == ["M"]
 
@@ -30,6 +30,6 @@ def test_hygiene_is_a_no_op_on_clean_data() -> None:
 
 
 def test_hygiene_tolerates_a_frame_without_those_columns() -> None:
-    """Ramka żądania nie ma ani celu, ani (być może) płci."""
+    """A request frame has neither the target nor, possibly, the gender column."""
     frame = pd.DataFrame({"AMT_CREDIT": [1.0]})
     assert len(drop_unusable_rows(frame)) == 1
