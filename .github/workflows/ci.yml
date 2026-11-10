@@ -49,4 +49,4 @@ jobs:
       # so CI does not download it. Tests marked `requires_data` skip
       # themselves; the rest must pass.
       - name: Pytest
-        run: uv run pytest
+        run: uv run pytest -m "not integration"

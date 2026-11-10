@@ -8,11 +8,18 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
+import fakeredis
 import pytest
 import sklearn
+from fastapi.testclient import TestClient
 
+from api import app as app_module
+from api.cache import ScoreCache, model_version
+from api.config import get_settings
+from artifact import Bundle
 from config import DATA_PATH
 
 
@@ -93,3 +100,42 @@ def synthetic_artifact(tmp_path_factory: pytest.TempPathFactory) -> Path:
         {"threshold": 0.5, "roc_auc": 0.5, "sklearn_version": sklearn.__version__},
         path,
     )
+
+
+@pytest.fixture
+def client(
+    synthetic_artifact: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[TestClient]:
+    """Client that runs the lifespan; without `with` the model never loads.
+
+    Points at the synthetic artifact from conftest.py, not a model trained on real
+    data, so the whole HTTP set runs in CI.
+    """
+    monkeypatch.setenv("CS_MODEL_PATH", str(synthetic_artifact))
+    # get_settings is lru_cached: without clearing it, settings from one test
+    # would leak into the next.
+    get_settings.cache_clear()
+    with TestClient(app_module.app) as test_client:
+        yield test_client
+    get_settings.cache_clear()
+
+
+@pytest.fixture
+def cached_client(
+    synthetic_artifact: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[TestClient]:
+    """Client whose cache is backed by fakeredis rather than a real server."""
+    monkeypatch.setenv("CS_MODEL_PATH", str(synthetic_artifact))
+    get_settings.cache_clear()
+
+    def fake_from_settings(settings: object, bundle: Bundle) -> ScoreCache:
+        return ScoreCache(
+            client=fakeredis.FakeAsyncRedis(),
+            version=model_version(bundle),
+            ttl_seconds=300,
+        )
+
+    monkeypatch.setattr(ScoreCache, "from_settings", fake_from_settings)
+    with TestClient(app_module.app) as test_client:
+        yield test_client
+    get_settings.cache_clear()

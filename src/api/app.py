@@ -5,23 +5,32 @@ The model is loaded once in `lifespan` and held on `app.state`.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
+from api.cache import ScoreCache
 from api.config import get_settings
+from api.events import emit_prediction
+from api.middleware import RequestContextMiddleware
 from api.schemas import (
     FEATURE_GROUPS,
+    BatchScoreRequest,
+    BatchScoreResponse,
     HealthResponse,
     ScoreRequest,
     ScoreResponse,
 )
 from artifact import load_bundle
-from predictor import Predictor
+from predictor import Predictor, ScoreResult
 
 # uvicorn configures only its own loggers; root stays unhandled at WARNING.
 logging.basicConfig(
@@ -68,9 +77,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "CS_SCORE_THRESHOLD" if settings.score_threshold is not None else "artifact"
     )
 
+    cache = ScoreCache.from_settings(settings, bundle)
+
     app.state.bundle = bundle
     app.state.predictor = predictor
     app.state.settings = settings
+    app.state.cache = cache
     logger.info(
         "Model ready. Training ROC-AUC: %s, threshold: %.2f (source: %s), "
         "input columns: %d, model features: %d, sklearn: %s",
@@ -82,6 +94,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         bundle.metadata.get("sklearn_version"),
     )
     yield
+    await cache.aclose()
     logger.info("Shutting down.")
 
 
@@ -91,6 +104,8 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+app.add_middleware(RequestContextMiddleware)
 
 
 @app.exception_handler(RequestValidationError)
@@ -131,25 +146,26 @@ async def health() -> HealthResponse:
     return HealthResponse(status="ok")
 
 
-# Sync def: predict_proba is CPU-bound (~24 ms), so FastAPI runs it in a threadpool.
-@app.post("/score", response_model=ScoreResponse)
-def score(payload: ScoreRequest, request: Request) -> ScoreResponse:  # type: ignore[valid-type]
-    """Score a single loan application.
+async def _score_off_the_loop(
+    predictor: Predictor, body: dict[str, Any]
+) -> ScoreResult:
+    """Run the CPU-bound scoring call without blocking the event loop.
+
+    `predict_proba` takes about 24 ms, long enough to stall every other
+    connection on the loop if called inline from a coroutine.
 
     Args:
-        payload: Application features; every field is optional.
-        request: Request, used to reach `app.state`.
+        predictor: Loaded predictor.
+        body: Validated request fields with empties removed.
 
     Returns:
-        The probability, the decision, and the threshold that produced it.
+        The scoring result.
 
     Raises:
-        HTTPException: 500 when scoring fails.
+        HTTPException: 422 for invalid feature values, 500 otherwise.
     """
-    predictor = request.app.state.predictor
-
     try:
-        result = predictor.score(payload.model_dump(exclude_none=True))
+        return await run_in_threadpool(predictor.score, body)
     except ValueError as exc:
         # A sklearn ValueError is almost always bad input, not a server fault.
         logger.warning("Rejected input: %s", exc)
@@ -160,6 +176,44 @@ def score(payload: ScoreRequest, request: Request) -> ScoreResponse:  # type: ig
         logger.exception("Scoring failed.")
         raise HTTPException(status_code=500, detail="Scoring failed.") from None
 
+
+@app.post("/score", response_model=ScoreResponse)
+async def score(
+    payload: ScoreRequest,  # type: ignore[valid-type]
+    request: Request,
+    response: Response,
+) -> ScoreResponse:
+    """Score a single loan application.
+
+    Args:
+        payload: Application features; every field is optional.
+        request: Request, used to reach `app.state`.
+        response: Response, used to set the cache header.
+
+    Returns:
+        The probability, the decision, and the threshold that produced it.
+
+    Raises:
+        HTTPException: 422 for invalid feature values, 500 when scoring fails.
+    """
+    predictor = request.app.state.predictor
+    cache = request.app.state.cache
+    body = payload.model_dump(exclude_none=True)
+
+    result, status = await cache.get(body)
+    if result is None:
+        result = await _score_off_the_loop(predictor, body)
+        if status == "MISS":
+            await cache.set(body, result)
+
+    response.headers["X-Cache"] = status
+    emit_prediction(
+        request_id=request.state.request_id,
+        probability=result.probability,
+        decision=result.decision,
+        threshold=result.threshold,
+        cache=status,
+    )
     return ScoreResponse(
         probability=result.probability,
         decision=result.decision,
@@ -178,3 +232,52 @@ def main() -> None:
         host="0.0.0.0",  # noqa: S104 - container must listen beyond localhost
         port=int(os.environ.get("PORT", "8080")),
     )
+
+
+@app.post("/score/batch", response_model=BatchScoreResponse)
+async def score_batch(
+    payload: BatchScoreRequest, request: Request
+) -> BatchScoreResponse:
+    """Score many applications concurrently.
+
+    Concurrency is bounded by a semaphore: the thread pool is shared with
+    every other request, and an unbounded gather would starve it.
+
+    Args:
+        payload: The batch.
+        request: Request, used to reach `app.state`.
+
+    Returns:
+        One result per application, in the order received.
+
+    Raises:
+        HTTPException: 422 for invalid feature values, 500 when scoring fails.
+    """
+    predictor = request.app.state.predictor
+    cache = request.app.state.cache
+    settings = request.app.state.settings
+    semaphore = asyncio.Semaphore(settings.batch_concurrency)
+
+    async def one(application: BaseModel) -> ScoreResponse:
+        body = application.model_dump(exclude_none=True)
+        async with semaphore:
+            result, status = await cache.get(body)
+            if result is None:
+                result = await _score_off_the_loop(predictor, body)
+                if status == "MISS":
+                    await cache.set(body, result)
+        emit_prediction(
+            request_id=request.state.request_id,
+            probability=result.probability,
+            decision=result.decision,
+            threshold=result.threshold,
+            cache=status,
+        )
+        return ScoreResponse(
+            probability=result.probability,
+            decision=result.decision,
+            threshold=result.threshold,
+        )
+
+    results = await asyncio.gather(*(one(a) for a in payload.applications))
+    return BatchScoreResponse(results=list(results))

@@ -26,6 +26,7 @@ dependencies = [
     # artifact. Without it the container starts and then fails in `lifespan`.
     # If the champion stops being XGBoost, this moves back to `training`.
     "xgboost>=3.4.1",
+    "redis>=5.0",
 ]
 
 [project.scripts]
@@ -48,6 +49,8 @@ dev = [
     "jupyterlab>=4.6.3",
     "matplotlib>=3.11.1",
     "pytest-cov>=7.1.0",
+    "fakeredis>=2.26",
+    "pytest-asyncio>=0.24",
 ]
 
 # Needed offline only: training and downloading data. The container image
@@ -99,8 +102,10 @@ api = ["feature_schema.json"]
 testpaths = ["tests"]
 pythonpath = ["src", "tests"]
 addopts = "-ra --strict-markers"
+asyncio_mode = "auto"
 markers = [
     "requires_data: needs data/raw/application_train.csv on disk; skipped in CI",
+    "integration: needs a running compose stack; deselected in CI",
 ]
 
 [tool.black]

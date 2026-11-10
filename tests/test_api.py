@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from pathlib import Path
 
 import pandas as pd
@@ -18,24 +17,6 @@ from predictor import Predictor
 # HTTP tests, because `requires_data` needs the 158 MB CSV, so a regression
 # in /score went green. They now run against the synthetic artifact built in
 # conftest.py from the committed feature contract, so they need no data.
-
-
-@pytest.fixture
-def client(
-    synthetic_artifact: Path, monkeypatch: pytest.MonkeyPatch
-) -> Iterator[TestClient]:
-    """Client that runs the lifespan; without `with` the model never loads.
-
-    Points at the synthetic artifact from conftest.py, not a model trained on real
-    data, so the whole HTTP set runs in CI.
-    """
-    monkeypatch.setenv("CS_MODEL_PATH", str(synthetic_artifact))
-    # get_settings is lru_cached: without clearing it, settings from one test
-    # would leak into the next.
-    get_settings.cache_clear()
-    with TestClient(app_module.app) as test_client:
-        yield test_client
-    get_settings.cache_clear()
 
 
 def test_health_returns_ok(client: TestClient) -> None:
@@ -294,3 +275,28 @@ def test_score_accepts_the_sentinel_without_error(client: TestClient) -> None:
     """The sentinel value must not turn scoring into a 500."""
     payload = {"AMT_INCOME_TOTAL": 202500.0, "DAYS_EMPLOYED": 365243.0}
     assert client.post("/score", json=payload).status_code == 200
+
+
+def test_score_reports_bypass_without_redis(client: TestClient) -> None:
+    response = client.post("/score", json={"AMT_CREDIT": 100000.0})
+    assert response.status_code == 200
+    assert response.headers["X-Cache"] == "BYPASS"
+
+
+def test_repeated_request_hits_the_cache(cached_client: TestClient) -> None:
+    payload = {"AMT_CREDIT": 100000.0}
+    first = cached_client.post("/score", json=payload)
+    second = cached_client.post("/score", json=payload)
+    assert first.headers["X-Cache"] == "MISS"
+    assert second.headers["X-Cache"] == "HIT"
+    assert first.json() == second.json()
+
+
+def test_startup_fails_loudly_when_the_artifact_is_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CS_MODEL_PATH", str(tmp_path / "absent.joblib"))
+    get_settings.cache_clear()
+    with pytest.raises(FileNotFoundError), TestClient(app_module.app):
+        pass
+    get_settings.cache_clear()

@@ -142,3 +142,26 @@ class HealthResponse(BaseModel):
     """Health probe response."""
 
     status: str = Field(..., examples=["ok"])
+
+
+BATCH_MAX_SIZE = 100
+"""Upper bound on one batch, so a caller cannot ask for unbounded work."""
+
+
+class BatchScoreRequest(BaseModel):
+    """A batch of applications to score."""
+
+    applications: list[ScoreRequest] = Field(  # type: ignore[valid-type]
+        ...,
+        min_length=1,
+        max_length=BATCH_MAX_SIZE,
+        description=f"Applications to score, 1 to {BATCH_MAX_SIZE} inclusive.",
+    )
+
+
+class BatchScoreResponse(BaseModel):
+    """Results in the order the applications were supplied."""
+
+    results: list[ScoreResponse] = Field(
+        ..., description="One result per application, in the order received."
+    )

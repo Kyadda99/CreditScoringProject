@@ -1,0 +1,129 @@
+name: credit-scoring
+
+# UV_INSECURE_HOST is empty everywhere by default. Set it in the shell only on
+# a machine whose TLS is intercepted by a proxy uv's rustls rejects.
+x-build-args: &build-args
+  UV_INSECURE_HOST: "${UV_INSECURE_HOST:-}"
+
+services:
+  api:
+    build:
+      context: .
+      target: serve
+      args: *build-args
+    profiles: [serve]
+    ports:
+      - "8080:8080"
+    environment:
+      CS_MODEL_PATH: /models/pipeline.joblib
+      CS_REDIS_URL: redis://redis:6379/0
+      CS_CACHE_TTL_SECONDS: "300"
+    volumes:
+      - model-artifact:/models:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      trainer:
+        condition: service_completed_successfully
+        required: false
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8080/health')
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1g
+        reservations:
+          memory: 512m
+
+  redis:
+    image: redis:7-alpine
+    profiles: [serve]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256m
+
+  mlflow:
+    build:
+      context: .
+      target: trainer
+      args: *build-args
+    profiles: [train]
+    command:
+      - mlflow
+      - server
+      - --host
+      - 0.0.0.0
+      - --port
+      - "5000"
+      - --backend-store-uri
+      - sqlite:////mlflow/mlflow.db
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow-data:/mlflow
+    user: root
+    restart: unless-stopped
+
+  prefect:
+    image: prefecthq/prefect:3-latest
+    profiles: [train]
+    command: ["prefect", "server", "start", "--host", "0.0.0.0"]
+    ports:
+      - "4200:4200"
+    volumes:
+      - prefect-data:/root/.prefect
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:4200/api/health')
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  trainer:
+    build:
+      context: .
+      target: trainer
+      args: *build-args
+    profiles: [train]
+    environment:
+      CS_MODEL_PATH: /models/pipeline.joblib
+      CS_DATA_PATH: /data/raw/application_train.csv
+      PREFECT_API_URL: http://prefect:4200/api
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    volumes:
+      - model-artifact:/models
+      - ./data:/data
+    user: root
+    depends_on:
+      prefect:
+        condition: service_healthy
+    # One-shot job: `unless-stopped` would restart it forever after it succeeds.
+    restart: "no"
+
+volumes:
+  model-artifact:
+  mlflow-data:
+  prefect-data:
