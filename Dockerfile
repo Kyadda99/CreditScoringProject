@@ -5,9 +5,19 @@ FROM python:3.12-slim AS builder
 # so a floating tag would defeat `--locked` three lines below.
 COPY --from=ghcr.io/astral-sh/uv:0.9.7 /uv /bin/uv
 
-# Empty by default, so every build verifies certificates. Set it only on a
-# machine whose TLS is intercepted by a proxy uv's rustls rejects:
-#   docker build --build-arg UV_INSECURE_HOST="pypi.org files.pythonhosted.org"
+# On a machine whose TLS is intercepted, container traffic is re-signed too and
+# the base image does not trust the proxy's root. uv's rustls then fails with
+# `invalid peer certificate: UnknownIssuer`. The fix that KEEPS verification on
+# is to hand the build a CA bundle carrying that root, as a secret so it never
+# lands in a layer:
+#   docker build --secret id=ca-bundle,src=$HOME/.ssl/cacert.pem .
+# Without the secret the mount is empty, the guard is a no-op, and the build
+# verifies against the base image's own store -- which is what a machine with
+# unintercepted TLS wants. CI never builds this image at all; it runs ruff,
+# black and pytest.
+#
+# UV_INSECURE_HOST stays as a last resort for a proxy whose root cannot be
+# obtained. It switches verification off for those hosts, so prefer the secret.
 ARG UV_INSECURE_HOST=""
 
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
@@ -27,6 +37,10 @@ COPY src/ ./src/
 # --no-editable: uv installs the project as editable by default, pointing at
 # /build/src, which the runtime stage does not have: "No module named api".
 RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=secret,id=ca-bundle,target=/run/secrets/ca-bundle.pem \
+    if [ -s /run/secrets/ca-bundle.pem ]; then \
+        export SSL_CERT_FILE=/run/secrets/ca-bundle.pem; \
+    fi; \
     uv sync --locked --no-default-groups --no-editable
 
 # Runtime stage: the venv and the code only. No uv; it cost 55 MB.
@@ -58,6 +72,7 @@ FROM python:3.12-slim AS trainer-builder
 
 COPY --from=ghcr.io/astral-sh/uv:0.9.7 /uv /bin/uv
 
+# Same TLS story as the serving builder; see the comment on that stage.
 ARG UV_INSECURE_HOST=""
 
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
@@ -71,6 +86,10 @@ COPY pyproject.toml uv.lock README.md ./
 COPY src/ ./src/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=secret,id=ca-bundle,target=/run/secrets/ca-bundle.pem \
+    if [ -s /run/secrets/ca-bundle.pem ]; then \
+        export SSL_CERT_FILE=/run/secrets/ca-bundle.pem; \
+    fi; \
     uv sync --locked --no-default-groups --group training --no-editable
 
 FROM python:3.12-slim AS trainer

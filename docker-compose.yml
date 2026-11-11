@@ -1,9 +1,17 @@
 name: credit-scoring
 
-# UV_INSECURE_HOST is empty everywhere by default. Set it in the shell only on
-# a machine whose TLS is intercepted by a proxy uv's rustls rejects.
+# UV_INSECURE_HOST is empty everywhere by default. It is the last resort for a
+# proxy whose root cannot be obtained; it disables verification for those hosts.
 x-build-args: &build-args
   UV_INSECURE_HOST: "${UV_INSECURE_HOST:-}"
+
+# Preferred escape for an intercepting proxy, because it keeps verification on:
+# point CS_CA_BUNDLE at a bundle carrying the proxy's root, e.g.
+#   CS_CA_BUNDLE=$HOME/.ssl/cacert.pem docker compose --profile serve build
+# The default is an empty file, which leaves the Dockerfile's guard a no-op so
+# builds verify against the base image's own store.
+x-build-secrets: &build-secrets
+  - ca-bundle
 
 services:
   api:
@@ -11,6 +19,7 @@ services:
       context: .
       target: serve
       args: *build-args
+      secrets: *build-secrets
     profiles: [serve]
     ports:
       - "8080:8080"
@@ -65,6 +74,7 @@ services:
       context: .
       target: trainer
       args: *build-args
+      secrets: *build-secrets
     profiles: [train]
     command:
       - mlflow
@@ -107,6 +117,7 @@ services:
       context: .
       target: trainer
       args: *build-args
+      secrets: *build-secrets
     profiles: [train]
     environment:
       CS_MODEL_PATH: /models/pipeline.joblib
@@ -122,6 +133,10 @@ services:
         condition: service_healthy
     # One-shot job: `unless-stopped` would restart it forever after it succeeds.
     restart: "no"
+
+secrets:
+  ca-bundle:
+    file: ${CS_CA_BUNDLE:-./.docker/empty-ca.pem}
 
 volumes:
   model-artifact:
