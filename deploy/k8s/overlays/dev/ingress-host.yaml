@@ -1,0 +1,18 @@
+# Every subdomain of localtest.me resolves to 127.0.0.1 from public DNS, so
+# no hosts-file entry is needed.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api
+spec:
+  rules:
+    - host: credit-dev.localtest.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  name: http

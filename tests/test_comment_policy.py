@@ -37,6 +37,11 @@ DISCOVERY_GLOBS = (
     "tests/**/*.py",
     ".github/**/*.yml",
     "notebooks/*.ipynb",
+    # The deployment tree carries as much hand-written explanation as the
+    # source does -- the Kubernetes manifests are mostly comments -- so it is
+    # held to the same standard.
+    "deploy/**/*.yaml",
+    "deploy/**/*.sh",
 )
 
 # Directories that hold no hand-written prose.

@@ -51,6 +51,14 @@ dev = [
     "pytest-cov>=7.1.0",
     "fakeredis>=2.26",
     "pytest-asyncio>=0.24",
+    # The manifest tests parse what `kubectl kustomize` renders.
+    "pyyaml>=6.0",
+]
+
+# The load generator. Kept out of `dev` because it is only ever run by hand
+# against a running cluster, and it is not small.
+load = [
+    "locust>=2.32",
 ]
 
 # Needed offline only: training and downloading data. The container image

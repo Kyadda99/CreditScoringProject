@@ -247,3 +247,6 @@ kaggle.json
 docs/
 PLAN.md
 CLAUDE.md
+
+# Kubernetes: generated dev credential, not for git.
+deploy/k8s/overlays/*/secret.env

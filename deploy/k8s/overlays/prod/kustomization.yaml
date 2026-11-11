@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Namespace, image tag and ingress host. No resource patch, so prod runs on
+# the base's limits. Never load-tested or operated.
+
+namespace: credit-prod
+
+resources:
+  - namespace.yaml
+  - ../../base
+
+images:
+  - name: credit-scoring/api
+    newTag: prod
+
+secretGenerator:
+  # Its own credential, not dev's. See dev/kustomization.yaml.
+  - name: api-secrets
+    envs:
+      - secret.env
+
+patches:
+  - path: ingress-host.yaml

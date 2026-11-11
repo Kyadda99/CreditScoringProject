@@ -1,0 +1,30 @@
+# kind cluster for the credit-scoring service. The port mappings and the node
+# label cannot be changed after the cluster exists.
+#
+#   extraPortMappings  publishes the ingress controller's 80/443 on the host;
+#                      kind nodes are Docker containers.
+#   ingress-ready      ingress-nginx's kind manifest selects on this label;
+#                      without it the controller pod stays Pending.
+#
+# The node image is pinned to v1.33.4, not kind 0.33.0's v1.34.0 default, to
+# stay inside kubectl's +/-1 skew window (client v1.32.2).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: credit-scoring
+# Pinned, so the kubeconfig is deterministic across recreations.
+networking:
+  apiServerPort: 6443
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.33.4
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 80
+      - containerPort: 443
+        hostPort: 443

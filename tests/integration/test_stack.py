@@ -24,6 +24,15 @@ TIMEOUT = 15.0
 @pytest.fixture(scope="module")
 def client() -> Iterator[httpx.Client]:
     with httpx.Client(base_url=BASE_URL, timeout=TIMEOUT) as client:
+        # Skip rather than fail when nothing is listening. These tests ask
+        # "does the real stack behave?", and with no stack running there is no
+        # answer -- a failure there would claim the service is broken when
+        # what is missing is the service. CI already deselects the marker; this
+        # is for a local `uv run pytest` with the stack down.
+        try:
+            client.get("/health")
+        except httpx.TransportError as exc:
+            pytest.skip(f"no stack reachable at {BASE_URL}: {exc.__class__.__name__}")
         yield client
 
 

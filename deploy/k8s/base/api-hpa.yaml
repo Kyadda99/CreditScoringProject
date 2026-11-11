@@ -1,0 +1,24 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          # Percent of the container's CPU *request* (100m), not of a core:
+          # the HPA reacts above 60m.
+          averageUtilization: 60
+  behavior:
+    scaleUp:
+      # The default is 0s, which lets one noisy sample add a pod. Scale-down
+      # keeps its own 300s default.
+      stabilizationWindowSeconds: 30
