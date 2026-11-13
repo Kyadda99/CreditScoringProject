@@ -12,6 +12,10 @@ Headless, the steady run, writing the CSVs that get reported:
         --headless --users 20 --spawn-rate 2 --run-time 3m \
         --csv load-steady
 
+The process exits non-zero when the run breaches the limits in
+`thresholds.py`; `CS_LOAD_MAX_FAIL_RATIO`, `CS_LOAD_MAX_P95_MS` and
+`CS_LOAD_MIN_REQUESTS` override them.
+
 At the default repeat rate that run saturates the container and drives the HPA
 to its ceiling, so there is no separate autoscaling scenario. Pair it with
 `deploy/k8s/hpa-watch.sh` to record what the autoscaler did.
@@ -22,10 +26,18 @@ measures the laptop.
 
 from __future__ import annotations
 
+import logging
 import os
 import random
 
-from locust import HttpUser, between, task
+from locust import HttpUser, between, events, task
+from locust.env import Environment
+from thresholds import LoadSummary, Thresholds, violations
+
+logger = logging.getLogger(__name__)
+
+# Parsed at import so a malformed limit stops the run before it starts.
+THRESHOLDS = Thresholds.from_env(os.environ)
 
 # Every feature is optional; the preprocessor imputes the rest. The cache key
 # is a hash of the payload, so varying AMT_CREDIT is what makes a miss.
@@ -81,3 +93,29 @@ class ScoringUser(HttpUser):
     def health(self) -> None:
         """Hit the endpoint all three probes use, under load."""
         self.client.get("/health")
+
+
+@events.quitting.add_listener
+def apply_thresholds(environment: Environment, **_kwargs: object) -> None:
+    """Set the exit code from the thresholds.
+
+    Without an explicit code Locust exits 1 on any failed request, which would
+    override the tolerated failure ratio. Locustfile exceptions still fail it.
+    """
+    total = environment.stats.total
+    summary = LoadSummary(
+        requests=total.num_requests,
+        fail_ratio=total.fail_ratio,
+        p95_ms=float(total.get_response_time_percentile(0.95) or 0),
+        exceptions=(
+            sum(e["count"] for e in environment.runner.exceptions.values())
+            if environment.runner
+            else 0
+        ),
+    )
+    found = violations(summary, THRESHOLDS)
+    for line in found:
+        logger.error("load threshold breached: %s", line)
+    if not found:
+        logger.info("load thresholds passed: %s", summary)
+    environment.process_exit_code = 1 if found else 0

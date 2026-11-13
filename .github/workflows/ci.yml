@@ -122,3 +122,109 @@ jobs:
       - name: Stop the stack
         if: always()
         run: $COMPOSE down -v
+
+  kind:
+    needs: [lint-and-test, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      UV_LOCKED: "1"
+      KIND_VERSION: v0.33.0
+      # Within one minor version of the node image in deploy/kind/cluster.yaml.
+      KUBECTL_VERSION: v1.33.4
+      CS_LOAD_MAX_FAIL_RATIO: "0.01"
+      CS_LOAD_MAX_P95_MS: "5000"
+      CS_LOAD_MIN_REQUESTS: "100"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v4
+
+      # Re-exported from the layer cache the build job wrote, under the tag
+      # the dev overlay deploys.
+      - name: Load the serving image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: serve
+          tags: credit-scoring/api:dev
+          load: true
+          cache-from: type=gha,scope=serve
+
+      - name: Install kind and kubectl
+        run: |
+          curl -fsSLo kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          curl -fsSLo kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          sudo install -m 0755 kind kubectl /usr/local/bin/
+          rm kind kubectl
+          kind version
+          kubectl version --client
+
+      # Creates the cluster and installs ingress-nginx and metrics-server.
+      - name: Create the cluster
+        run: deploy/kind/bootstrap.sh
+
+      # docker save | ctr import, which works with either Docker image store.
+      - name: Side-load the image
+        run: deploy/kind/load-image.sh credit-scoring/api:dev
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Sync dependencies
+        run: uv python install && uv sync --group load
+
+      - name: Put the synthetic model on the node
+        run: |
+          uv run cs-synthetic-artifact --output "$RUNNER_TEMP/models/pipeline.joblib"
+          deploy/kind/sync-artifact.sh "$RUNNER_TEMP/models/pipeline.joblib"
+
+      - name: Generate the Redis secret
+        run: printf 'REDIS_PASSWORD=%s\n' "$(openssl rand -hex 24)" > deploy/k8s/overlays/dev/secret.env
+
+      # The ingress-nginx admission webhook can reject the Ingress for a few
+      # seconds after the controller reports ready.
+      - name: Apply the dev overlay
+        run: |
+          for attempt in 1 2 3; do
+            kubectl apply -k deploy/k8s/overlays/dev && exit 0
+            echo "apply failed (attempt $attempt); retrying in 10s"
+            sleep 10
+          done
+          exit 1
+
+      - name: Wait for the rollout
+        run: |
+          kubectl -n credit-dev rollout status deployment/redis --timeout=180s
+          kubectl -n credit-dev rollout status deployment/api --timeout=300s
+
+      - name: Smoke test
+        run: deploy/k8s/smoke.sh http://credit-dev.localtest.me credit-dev.localtest.me
+
+      - name: Load test
+        run: >-
+          uv run --group load locust -f tests/load/locustfile.py
+          --host http://credit-dev.localtest.me
+          --headless --users 5 --spawn-rate 5 --run-time 60s
+          --csv locust-ci
+
+      - name: Cluster diagnostics
+        if: failure()
+        run: |
+          kubectl -n credit-dev get all || true
+          kubectl -n credit-dev get events --sort-by=.lastTimestamp || true
+          kubectl -n credit-dev describe pods || true
+          kubectl -n credit-dev logs deployment/api --all-containers --tail=200 || true
+          kubectl -n credit-dev logs deployment/redis --tail=100 || true
+          kubectl -n ingress-nginx logs deployment/ingress-nginx-controller --tail=100 || true
+
+      - name: Upload Locust results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: locust-csv
+          path: locust-ci_*.csv
+          if-no-files-found: ignore

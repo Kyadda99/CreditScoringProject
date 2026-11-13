@@ -127,4 +127,6 @@ k wait --namespace kube-system \
 echo
 echo "== cluster ready"
 k_value get nodes
-k_value top nodes 2>&1 | head -3
+# The Metrics API serves a scrape interval or so after metrics-server reports
+# available, so on a fresh cluster this can fail without anything being wrong.
+k_value top nodes 2>&1 | head -3 || echo "   node metrics not served yet"
