@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import Iterator
+from typing import NoReturn
 
 import httpx
 import pytest
@@ -21,18 +22,50 @@ PAYLOAD = {"AMT_CREDIT": 100000.0}
 TIMEOUT = 15.0
 
 
+_TRUE = frozenset({"1", "true", "yes", "on"})
+_FALSE = frozenset({"", "0", "false", "no", "off"})
+
+
+def stack_required(value: str | None) -> bool:
+    """Parse CS_INTEGRATION_REQUIRE_STACK.
+
+    An unrecognised value raises: a typo that quietly meant "optional" would
+    let CI pass by skipping.
+    """
+    normalised = (value or "").strip().lower()
+    if normalised in _TRUE:
+        return True
+    if normalised in _FALSE:
+        return False
+    raise ValueError(
+        f"CS_INTEGRATION_REQUIRE_STACK={value!r}: expected 1/0, true/false"
+    )
+
+
+REQUIRE_STACK = stack_required(os.environ.get("CS_INTEGRATION_REQUIRE_STACK"))
+
+
+def unreachable_stack(base_url: str, exc: Exception, *, required: bool) -> NoReturn:
+    """Skip the suite, or fail it when a stack was promised.
+
+    Skipping suits a local `uv run pytest` with the stack down: there is no
+    answer to "does the real stack behave?", not a broken service. The CI job
+    that starts the stack sets CS_INTEGRATION_REQUIRE_STACK=1, so a stack that
+    died before the tests ran cannot pass as a skip.
+    """
+    message = f"no stack reachable at {base_url}: {exc.__class__.__name__}"
+    if required:
+        pytest.fail(message)
+    pytest.skip(message)
+
+
 @pytest.fixture(scope="module")
 def client() -> Iterator[httpx.Client]:
     with httpx.Client(base_url=BASE_URL, timeout=TIMEOUT) as client:
-        # Skip rather than fail when nothing is listening. These tests ask
-        # "does the real stack behave?", and with no stack running there is no
-        # answer -- a failure there would claim the service is broken when
-        # what is missing is the service. CI already deselects the marker; this
-        # is for a local `uv run pytest` with the stack down.
         try:
             client.get("/health")
         except httpx.TransportError as exc:
-            pytest.skip(f"no stack reachable at {BASE_URL}: {exc.__class__.__name__}")
+            unreachable_stack(BASE_URL, exc, required=REQUIRE_STACK)
         yield client
 
 

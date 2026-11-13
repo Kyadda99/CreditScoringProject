@@ -37,6 +37,7 @@ cs-train = "train:cli"
 cs-tune = "tune:cli"
 cs-export = "registry:cli"
 cs-serve = "api.app:main"
+cs-synthetic-artifact = "synthetic_artifact:main"
 
 [dependency-groups]
 # Dev-only tooling. uv installs these by default with `uv sync`;
@@ -94,7 +95,7 @@ override-dependencies = ["nvidia-nccl-cu13; sys_platform == 'never'"]
 # itself; delete a module and the wheel quietly loses it. The real guard is
 # tests/test_api.py importing through the installed package.
 [tool.setuptools]
-py-modules = ["config", "data", "download_data", "preprocessing", "strategies", "preprocessor", "data_loader", "trainer", "predictor", "settings", "flows", "evaluation", "artifact", "train", "eda", "quality_gate", "registry", "tune"]
+py-modules = ["config", "data", "download_data", "preprocessing", "strategies", "preprocessor", "data_loader", "trainer", "predictor", "settings", "flows", "evaluation", "artifact", "train", "eda", "quality_gate", "registry", "tune", "synthetic_artifact"]
 
 # Sub-packages under src/, such as api/ and features/.
 [tool.setuptools.packages.find]

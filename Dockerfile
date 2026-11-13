@@ -13,8 +13,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.9.7 /uv /bin/uv
 #   docker build --secret id=ca-bundle,src=$HOME/.ssl/cacert.pem .
 # Without the secret the mount is empty, the guard is a no-op, and the build
 # verifies against the base image's own store -- which is what a machine with
-# unintercepted TLS wants. CI never builds this image at all; it runs ruff,
-# black and pytest.
+# unintercepted TLS wants, CI included.
 #
 # UV_INSECURE_HOST stays as a last resort for a proxy whose root cannot be
 # obtained. It switches verification off for those hosts, so prefer the secret.
@@ -27,13 +26,24 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
 
 WORKDIR /build
 
-COPY pyproject.toml uv.lock README.md ./
-COPY src/ ./src/
-
+# Dependencies first, from bind-mounted pyproject.toml and uv.lock only: a
+# change to the source or the README leaves this layer cached.
 # --locked: fails when uv.lock has drifted from pyproject.toml, the same
 # guarantee CI enforces.
 # --no-default-groups: no dev, no training (mlflow, kagglehub); the image
 # serves the model, it does not train it.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=secret,id=ca-bundle,target=/run/secrets/ca-bundle.pem \
+    if [ -s /run/secrets/ca-bundle.pem ]; then \
+        export SSL_CERT_FILE=/run/secrets/ca-bundle.pem; \
+    fi; \
+    uv sync --locked --no-default-groups --no-install-project
+
+COPY pyproject.toml uv.lock README.md ./
+COPY src/ ./src/
+
 # --no-editable: uv installs the project as editable by default, pointing at
 # /build/src, which the runtime stage does not have: "No module named api".
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -81,6 +91,15 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
     UV_INSECURE_HOST=${UV_INSECURE_HOST}
 
 WORKDIR /build
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=secret,id=ca-bundle,target=/run/secrets/ca-bundle.pem \
+    if [ -s /run/secrets/ca-bundle.pem ]; then \
+        export SSL_CERT_FILE=/run/secrets/ca-bundle.pem; \
+    fi; \
+    uv sync --locked --no-default-groups --group training --no-install-project
 
 COPY pyproject.toml uv.lock README.md ./
 COPY src/ ./src/

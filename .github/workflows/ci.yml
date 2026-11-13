@@ -50,3 +50,75 @@ jobs:
       # themselves; the rest must pass.
       - name: Pytest
         run: uv run pytest -m "not integration"
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v4
+
+      # Populates the layer cache the later jobs build from. Nothing is pushed.
+      # No ca-bundle secret: the Dockerfile's guard skips an absent one.
+      - name: Build the serving image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: serve
+          tags: credit-scoring/api:ci
+          cache-from: type=gha,scope=serve
+          cache-to: type=gha,scope=serve,mode=max
+
+  integration:
+    needs: [lint-and-test, build]
+    runs-on: ubuntu-latest
+    env:
+      UV_LOCKED: "1"
+      CS_INTEGRATION_REQUIRE_STACK: "1"
+      COMPOSE: docker compose -f docker-compose.yml -f docker-compose.ci.yml --profile serve
+    steps:
+      # First, so the log and teardown steps can still parse the overlay when
+      # an earlier step fails.
+      - name: Model directory
+        run: echo "CS_MODEL_DIR=$RUNNER_TEMP/models" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v4
+
+      # Every layer comes from the cache the build job wrote; only the export
+      # into the local daemon runs here.
+      - name: Load the serving image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: serve
+          tags: credit-scoring/api:ci
+          load: true
+          cache-from: type=gha,scope=serve
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Sync dependencies
+        run: uv python install && uv sync
+
+      - name: Write the synthetic model
+        run: uv run cs-synthetic-artifact --output "$CS_MODEL_DIR/pipeline.joblib"
+
+      - name: Start the stack
+        run: $COMPOSE up -d --wait --wait-timeout 120 --no-build
+
+      - name: Integration tests
+        run: uv run pytest -m integration
+
+      - name: Stack logs
+        if: failure()
+        run: $COMPOSE logs --no-color
+
+      - name: Stop the stack
+        if: always()
+        run: $COMPOSE down -v

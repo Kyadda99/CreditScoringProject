@@ -1,0 +1,15 @@
+# Overlay for CI, applied on top of docker-compose.yml:
+#
+#   CS_MODEL_DIR=/path/to/dir docker compose -f docker-compose.yml \
+#       -f docker-compose.ci.yml --profile serve up -d --wait --no-build
+#
+# The image is built by the workflow from the layer cache, not by compose, and
+# the model is a synthetic artifact (`uv run cs-synthetic-artifact`) on a bind
+# mount instead of the trainer's volume. Volumes merge by container path, so
+# this mount replaces the `model-artifact` one.
+services:
+  api:
+    image: credit-scoring/api:ci
+    pull_policy: never
+    volumes:
+      - ${CS_MODEL_DIR:?set CS_MODEL_DIR to the directory holding pipeline.joblib}:/models:ro
