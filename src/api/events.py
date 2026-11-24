@@ -20,6 +20,7 @@ def _emit(event: str, **fields: object) -> None:
     record = {
         "event": event,
         "timestamp": datetime.now(UTC).isoformat(),
+        "severity": "INFO",
         **fields,
     }
     print(json.dumps(record), flush=True)
@@ -74,4 +75,23 @@ def emit_prediction(
         decision=decision,
         threshold=threshold,
         cache=cache,
+    )
+
+
+def emit_model_loaded(
+    model_path: str, registry_version: int | None, load_ms: float
+) -> None:
+    """Emit the startup event, once per process after the model is accepted.
+
+    Args:
+        model_path: Artifact path the model was loaded from.
+        registry_version: Registry version stored in the artifact; `None` for
+            an artifact that did not come from the registry.
+        load_ms: Time spent loading the artifact.
+    """
+    _emit(
+        "model_loaded",
+        model_path=model_path,
+        registry_version=registry_version,
+        load_ms=load_ms,
     )

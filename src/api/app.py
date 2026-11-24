@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -19,7 +20,7 @@ from starlette.concurrency import run_in_threadpool
 
 from api.cache import ScoreCache
 from api.config import get_settings
-from api.events import emit_prediction
+from api.events import emit_model_loaded, emit_prediction
 from api.middleware import RequestContextMiddleware
 from api.schemas import (
     FEATURE_GROUPS,
@@ -55,7 +56,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     settings = get_settings()
     logger.info("Loading model: %s", settings.model_path)
+    started = time.perf_counter()
     bundle = load_bundle(settings.model_path)
+    load_ms = (time.perf_counter() - started) * 1000
 
     # Fail closed. Compares the input contract (raw columns), not the model's
     # feature groups: the two differ because the model consumes derived
@@ -92,6 +95,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         len(bundle.input_groups.all_features),
         len(bundle.groups.all_features),
         bundle.metadata.get("sklearn_version"),
+    )
+    emit_model_loaded(
+        str(settings.model_path), bundle.metadata.get("registry_version"), load_ms
     )
     yield
     await cache.aclose()

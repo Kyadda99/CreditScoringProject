@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from api.events import emit_prediction, emit_request
+from api.events import emit_model_loaded, emit_prediction, emit_request
 
 
 def test_request_event_is_one_json_line(capsys: pytest.CaptureFixture[str]) -> None:
@@ -37,3 +37,23 @@ def test_prediction_event_carries_the_cache_outcome(
     event = json.loads(capsys.readouterr().out.strip())
     assert event["event"] == "prediction"
     assert event["cache"] == "HIT"
+
+
+def test_every_event_carries_info_severity(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Cloud Logging reads the `severity` key of a JSON line as the entry level."""
+    emit_request(
+        request_id="abc", method="GET", path="/health", status_code=200, duration_ms=1.0
+    )
+    assert json.loads(capsys.readouterr().out.strip())["severity"] == "INFO"
+
+
+def test_model_loaded_event_shape(capsys: pytest.CaptureFixture[str]) -> None:
+    emit_model_loaded("/models/1/pipeline.joblib", 1, 12.5)
+    event = json.loads(capsys.readouterr().out.strip())
+    assert event["event"] == "model_loaded"
+    assert event["model_path"] == "/models/1/pipeline.joblib"
+    assert event["registry_version"] == 1
+    assert event["load_ms"] == 12.5
+    assert event["timestamp"].endswith("+00:00")

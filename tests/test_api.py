@@ -155,6 +155,56 @@ def test_lifespan_logs_that_the_model_was_loaded(
     assert any("Loading model" in r.getMessage() for r in records)
 
 
+def _model_loaded_events(stdout: str) -> list[dict[str, object]]:
+    import json
+
+    events = []
+    for line in stdout.splitlines():
+        if line.startswith("{"):
+            record = json.loads(line)
+            if record.get("event") == "model_loaded":
+                events.append(record)
+    return events
+
+
+def test_lifespan_emits_model_loaded_once(
+    synthetic_artifact: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("CS_MODEL_PATH", str(synthetic_artifact))
+    get_settings.cache_clear()
+    with TestClient(app_module.app) as client:
+        assert client.get("/health").status_code == 200
+        for _ in range(2):
+            assert client.post("/score", json={}).status_code == 200
+
+    events = _model_loaded_events(capsys.readouterr().out)
+    assert len(events) == 1
+    assert events[0]["model_path"] == str(synthetic_artifact)
+    assert events[0]["registry_version"] is None
+    assert isinstance(events[0]["load_ms"], float)
+
+
+def test_rejected_artifact_emits_no_model_loaded_event(
+    synthetic_artifact: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        app_module,
+        "FEATURE_GROUPS",
+        FeatureGroups(numeric=("SOMETHING_ELSE",), categorical=(), binary=()),
+    )
+    monkeypatch.setenv("CS_MODEL_PATH", str(synthetic_artifact))
+    get_settings.cache_clear()
+    with pytest.raises(RuntimeError):
+        with TestClient(app_module.app):
+            pass
+    get_settings.cache_clear()
+    assert _model_loaded_events(capsys.readouterr().out) == []
+
+
 def test_lifespan_fails_closed_when_schema_and_artifact_disagree(
     synthetic_artifact: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
