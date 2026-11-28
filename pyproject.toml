@@ -87,13 +87,12 @@ default-groups = ["dev", "training"]
 override-dependencies = ["nvidia-nccl-cu13; sys_platform == 'never'"]
 
 # Flat modules live directly under src/ and are imported by bare name
-# (`from config import TARGET`). Add one entry here per module as each
-# phase introduces it.
+# (`from config import TARGET`). Add one entry here per new module.
 #
 # Verified with setuptools 80.x: a name listed here that is not on disk is
 # silently skipped and the build still succeeds. This list does not police
-# itself; delete a module and the wheel quietly loses it. The real guard is
-# tests/test_api.py importing through the installed package.
+# itself; delete a module and the wheel quietly loses it.
+# tests/test_packaging.py fails when a module under src/ is missing from it.
 [tool.setuptools]
 py-modules = ["config", "data", "download_data", "preprocessing", "strategies", "preprocessor", "data_loader", "trainer", "predictor", "settings", "flows", "evaluation", "artifact", "train", "eda", "quality_gate", "registry", "tune", "synthetic_artifact"]
 

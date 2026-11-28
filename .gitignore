@@ -237,7 +237,7 @@ mlartifacts/
 *.pkl
 models/
 
-# Prediction logs written by the API's BackgroundTasks
+# Prediction logs (*.jsonl), never committed
 *.jsonl
 
 # Kaggle API credentials
