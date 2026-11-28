@@ -74,6 +74,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       UV_LOCKED: "1"
+      # The default groups include torch, which this job never imports.
+      UV_NO_GROUP: nn
       CS_INTEGRATION_REQUIRE_STACK: "1"
       COMPOSE: docker compose -f docker-compose.yml -f docker-compose.ci.yml --profile serve
     steps:
@@ -129,6 +131,8 @@ jobs:
     timeout-minutes: 30
     env:
       UV_LOCKED: "1"
+      # The default groups include torch, which this job never imports.
+      UV_NO_GROUP: nn
       KIND_VERSION: v0.33.0
       # Within one minor version of the node image in deploy/kind/cluster.yaml.
       KUBECTL_VERSION: v1.33.4

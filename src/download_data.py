@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import sys
 import zipfile
@@ -26,19 +27,67 @@ from dotenv import load_dotenv
 
 from config import PROJECT_ROOT, RAW_DATA_DIR
 
-# kagglehub reads KAGGLE_USERNAME/KAGGLE_KEY from the process environment
-# and knows nothing about .env files. The path is resolved from PROJECT_ROOT,
-# not cwd, so cs-download works from a subdirectory. override=False keeps real
-# shell variables winning, so .env is a local convenience, not a CI override.
-load_dotenv(PROJECT_ROOT / ".env", override=False)
-
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 COMPETITION = "home-credit-default-risk"
 FILENAME = "application_train.csv"
 DEST_DIR = RAW_DATA_DIR
 DEST = DEST_DIR / FILENAME
+
+CREDENTIALS_HINT = (
+    "Check credentials: KAGGLE_API_TOKEN, or the pair "
+    "KAGGLE_USERNAME+KAGGLE_KEY, or ~/.kaggle/kaggle.json; see .env.example."
+)
+RULES_HINT = (
+    "Also check that the competition rules were accepted in a browser, "
+    "without which the API returns 403 even with valid keys."
+)
+
+
+def kaggle_download(
+    handle: str,
+    path: str,
+    *,
+    competition: bool = False,
+    cache_dir: Path | None = None,
+    hint: str = "",
+) -> Path:
+    """Download one file through kagglehub with the project's setup.
+
+    kagglehub reads credentials and its cache location from the process
+    environment and knows nothing about .env files, so `.env` is loaded first.
+    The path is resolved from PROJECT_ROOT, not cwd, so the scripts work from
+    a subdirectory. override=False keeps real shell variables winning, so .env
+    is a local convenience, not a CI override.
+
+    Args:
+        handle: Dataset `owner/name`, or the competition name.
+        path: File inside the dataset or competition.
+        competition: Download from a competition instead of a dataset.
+        cache_dir: Default kagglehub cache; a `KAGGLEHUB_CACHE` already set in
+            the environment or `.env` wins. None keeps kagglehub's default.
+        hint: Extra advice logged when the download fails.
+
+    Returns:
+        The path kagglehub returns.
+
+    Raises:
+        SystemExit: When Kaggle rejects the request.
+    """
+    load_dotenv(PROJECT_ROOT / ".env", override=False)
+    if cache_dir is not None:
+        os.environ.setdefault("KAGGLEHUB_CACHE", str(cache_dir))
+    import kagglehub
+
+    fetch = (
+        kagglehub.competition_download if competition else kagglehub.dataset_download
+    )
+    try:
+        return Path(fetch(handle, path=path))
+    except Exception as exc:
+        logger.error("Download failed: %s", exc)
+        logger.error(" ".join(filter(None, (CREDENTIALS_HINT, hint))))
+        raise SystemExit(1) from exc
 
 
 def _materialise(cached: Path, dest: Path) -> None:
@@ -98,24 +147,11 @@ def download() -> Path:
     if DEST.exists():
         logger.warning("%s is a ZIP archive, not a CSV; extracting again.", DEST)
 
-    import kagglehub
-
     logger.info("Downloading %s from competition %s ...", FILENAME, COMPETITION)
-    try:
-        cached = kagglehub.competition_download(COMPETITION, path=FILENAME)
-    except Exception as exc:
-        logger.error("Download failed: %s", exc)
-        logger.error(
-            "Check: (1) credentials - KAGGLE_API_TOKEN, or the pair "
-            "KAGGLE_USERNAME+KAGGLE_KEY, or ~/.kaggle/kaggle.json; "
-            "(2) whether the competition rules were accepted in a browser; "
-            "see .env.example. "
-            "without which the API returns 403 even with valid keys."
-        )
-        raise SystemExit(1) from exc
+    cached = kaggle_download(COMPETITION, FILENAME, competition=True, hint=RULES_HINT)
 
     DEST_DIR.mkdir(parents=True, exist_ok=True)
-    _materialise(Path(cached), DEST)
+    _materialise(cached, DEST)
     size_mb = DEST.stat().st_size / 1024**2
     logger.info("Saved %s (%.1f MB).", DEST, size_mb)
     return DEST
@@ -123,6 +159,7 @@ def download() -> Path:
 
 def main() -> None:
     """CLI entry point."""
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     path = download()
     print(f"OK: {path}")
 

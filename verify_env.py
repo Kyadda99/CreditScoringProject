@@ -2,7 +2,7 @@
 
 Reports library versions, GPU availability and whether the dataset is present.
 Exits non-zero when something required is missing, so it can be used in a
-script or in CI.
+script or in CI. The neural-network data is reported but never fails the check.
 
 Usage:
     uv run python verify_env.py
@@ -14,6 +14,7 @@ import importlib
 import importlib.metadata
 import platform
 import sys
+from pathlib import Path
 
 # Optional libraries are reported as information, not as an error.
 REQUIRED: tuple[str, ...] = ("pandas", "numpy")
@@ -23,6 +24,7 @@ OPTIONAL: tuple[str, ...] = (
     "xgboost",
     "lightgbm",
     "torch",
+    "torchvision",
     "mlflow",
     "optuna",
     "fastapi",
@@ -88,6 +90,21 @@ def _report_data() -> bool:
     return True
 
 
+def _report_nn_data(descriptions: Path, documents: Path) -> None:
+    """Print whether the neural-network datasets are on disk."""
+    print("\nNeural-network data")
+    if descriptions.exists():
+        size_mb = descriptions.stat().st_size / 1024**2
+        print(f"  [ OK ] {descriptions.name} ({size_mb:.1f} MB)")
+    else:
+        print(f"  [  - ] {descriptions} - run: uv run cs-nn-download-text")
+    images = sum(1 for _ in documents.rglob("*.png")) if documents.exists() else 0
+    if images:
+        print(f"  [ OK ] {documents.name}: {images} images")
+    else:
+        print(f"  [  - ] {documents} - run: uv run cs-nn-download-documents")
+
+
 def main() -> int:
     """Run every check. Return the process exit code."""
     host = f"{platform.system()} {platform.machine()}"
@@ -95,6 +112,9 @@ def main() -> int:
     packages_ok = _report_packages()
     _report_gpu()
     data_ok = _report_data()
+    from config import DESCRIPTIONS_PATH, DOCUMENTS_DIR
+
+    _report_nn_data(DESCRIPTIONS_PATH, DOCUMENTS_DIR)
 
     if packages_ok and data_ok:
         print("\nEnvironment ready.")

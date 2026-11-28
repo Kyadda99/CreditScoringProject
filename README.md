@@ -124,6 +124,16 @@ rules](https://www.kaggle.com/competitions/home-credit-default-risk/rules)
 accepted in a browser. Without the second, the API returns 403 even with valid
 keys.
 
+**Neural-network data** (the document CNN and the description LSTM):
+
+```bash
+uv run cs-nn-download-text       # Lending Club descriptions -> data/raw/lending_club/
+uv run cs-nn-download-documents  # RVL-CDIP subset -> data/processed/documents/ as PNG
+```
+
+`uv sync` installs PyTorch from the CUDA 13.0 index on Windows and from the
+CPU-only index on Linux, where Docker and CI run.
+
 **Train and serve**
 
 ```bash
@@ -176,8 +186,9 @@ uv run pytest
 
 - Unit tests, Kubernetes manifest tests rendered from the overlays, and
   workflow tests for CI and CD.
-- Tests marked `requires_data` skip without the CSV. `integration` tests skip
-  when no stack is running. So a fresh clone passes with no data and no model.
+- Tests marked `requires_data` skip when the dataset they need is not
+  downloaded. `integration` tests skip when no stack is running. So a fresh
+  clone passes with no data and no model.
 - Integration tests against a running stack:
   `CS_INTEGRATION_BASE_URL=http://localhost:8080 uv run pytest tests/integration`.
 - Load test:

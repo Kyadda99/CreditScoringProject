@@ -17,6 +17,14 @@ PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 DATA_DIR: Path = PROJECT_ROOT / "data"
 RAW_DATA_DIR: Path = DATA_DIR / "raw"
 DATA_PATH: Path = RAW_DATA_DIR / "application_train.csv"
+PROCESSED_DATA_DIR: Path = DATA_DIR / "processed"
+
+# Neural-network datasets. Defined here rather than in the `nn` package so
+# that code without the `nn` group installed can still locate them.
+LENDING_CLUB_DIR: Path = RAW_DATA_DIR / "lending_club"
+DESCRIPTIONS_PATH: Path = LENDING_CLUB_DIR / "descriptions.csv"
+RVL_CDIP_DIR: Path = RAW_DATA_DIR / "rvl_cdip" / "parquet"
+DOCUMENTS_DIR: Path = PROCESSED_DATA_DIR / "documents"
 
 # --- Column contract -------------------------------------------------------
 

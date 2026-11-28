@@ -1,7 +1,8 @@
 """Shared pytest configuration.
 
-The data contract tests need the ~160 MB CSV, which CI does not have. The
-`requires_data` marker skips them cleanly without disabling the whole file.
+The data contract tests need downloaded datasets, which CI does not have.
+`@pytest.mark.requires_data(*paths)` skips a test when any named path is
+missing; with no arguments it means the Home Credit CSV.
 """
 
 from __future__ import annotations
@@ -19,19 +20,38 @@ from api import app as app_module
 from api.cache import ScoreCache, model_version
 from api.config import get_settings
 from artifact import Bundle
-from config import DATA_PATH
+from config import DATA_PATH, DESCRIPTIONS_PATH, DOCUMENTS_DIR
+
+DOWNLOAD_COMMANDS: dict[Path, str] = {
+    DATA_PATH: "cs-download",
+    DESCRIPTIONS_PATH: "cs-nn-download-text",
+    DOCUMENTS_DIR: "cs-nn-download-documents",
+}
+
+
+def missing_data(item: pytest.Item) -> list[Path]:
+    """Return the `requires_data` paths of `item` that are not on disk."""
+    marker = item.get_closest_marker("requires_data")
+    if marker is None:
+        return []
+    paths = [Path(p) for p in marker.args] or [DATA_PATH]
+    return [path for path in paths if not path.exists()]
 
 
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
-    """Skip tests marked `requires_data` when the dataset is not on disk."""
-    if DATA_PATH.exists():
-        return
-    skip = pytest.mark.skip(reason=f"Missing {DATA_PATH}; run `uv run cs-download`")
+    """Skip tests marked `requires_data` when a dataset they name is absent."""
     for item in items:
-        if "requires_data" in item.keywords:
-            item.add_marker(skip)
+        missing = missing_data(item)
+        if missing:
+            commands = sorted(
+                {DOWNLOAD_COMMANDS.get(p, "the download") for p in missing}
+            )
+            reason = f"Missing {', '.join(map(str, missing))}; run " + ", ".join(
+                f"`uv run {c}`" for c in commands
+            )
+            item.add_marker(pytest.mark.skip(reason=reason))
 
 
 @pytest.fixture(scope="session", autouse=True)

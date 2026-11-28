@@ -90,3 +90,14 @@ def test_executed_deploy_scripts_are_executable_in_git() -> None:
         if path not in sourced:
             assert mode == "100755", f"{path} is {mode}, not executable"
     assert "deploy/k8s/smoke.sh" in modes, "smoke.sh is not tracked"
+
+
+@pytest.mark.parametrize("job", ["integration", "kind"])
+def test_stack_jobs_do_not_install_torch(job: str) -> None:
+    env = _load(WORKFLOW)["jobs"][job]["env"]
+    assert env.get("UV_NO_GROUP") == "nn"
+
+
+def test_unit_test_job_installs_torch() -> None:
+    env = _load(WORKFLOW)["jobs"]["lint-and-test"]["env"]
+    assert "UV_NO_GROUP" not in env
